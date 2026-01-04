@@ -45,12 +45,16 @@ cat /tmp/blocklist_update.tmp \
 # 5. ATOMIC SWAP
 # This switches the sets instantly. The main name now points to the new data.
 if ipset swap "$IPSET_TMP_NAME" "$IPSET_NAME"; then
-    logger -t "$LOG_TAG" "Success: Blocklist updated via SWAP method."
     
     # 6. Save the new (now active) list to disk for next boot
     ipset save "$IPSET_NAME" > "$BACKUP_FILE"
     
-    # 7. Cleanup
+    # 7. Count IPs and Log Success
+    # Count lines starting with 'add' in the saved file to get unique IP count
+    COUNT=$(grep -c "^add" "$BACKUP_FILE")
+    logger -t "$LOG_TAG" "Success: Blocklist updated via SWAP method. Active IPs: $COUNT"
+    
+    # 8. Cleanup
     ipset destroy "$IPSET_TMP_NAME"
     rm /tmp/blocklist_update.tmp
 else
