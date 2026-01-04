@@ -46,6 +46,22 @@ echo "1 * * * * root /opt/bin/firewall_stats.sh > /dev/null 2>&1" >> /opt/etc/cr
 
 **firewall_stats.sh**: Runs hourly. It reads the iptables counters, calculates the delta from the last hour, and updates a persistent "Lifetime Total" file stored on disk.
 
+## ⏰ Automated Updates
+
+To update the blocklist daily without any downtime (using `ipset swap`), install the update script and schedule it with Cron.
+
+1.  **Install Script**
+    Copy `scripts/update_blocklist.sh` to `/opt/bin/update_blocklist.sh` and make executable:
+    ```bash
+    chmod +x /opt/bin/update_blocklist.sh
+    ```
+
+2.  **Schedule (Cron)**
+    Run the update every night at 04:00 AM:
+    ```bash
+    echo "0 4 * * * root /opt/bin/update_blocklist.sh > /dev/null 2>&1" >> /opt/etc/crontab
+    ```
+
 ## 📺 Real-Time Monitor
 
 Includes a dashboard script to view blocking statistics in real-time directly from the terminal.
