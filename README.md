@@ -18,11 +18,6 @@ High-performance firewall scripts for Keenetic routers (Entware/NDM) that integr
     opkg update
     opkg install ipset iptables bash wget
     ```
-3.  **Important:** For OpenVPN clients to access the Internet, enable NAT natively on the router via CLI:
-    ```bash
-    ip nat OpenVPN0
-    system configuration save
-    ```
 
 ## 🛠️ Installation
 
