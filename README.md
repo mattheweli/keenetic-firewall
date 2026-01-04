@@ -50,3 +50,14 @@ echo "1 * * * * root /opt/bin/firewall_stats.sh > /dev/null 2>&1" >> /opt/etc/cr
 **100-firewall.sh**: Hooks into NDM. It applies DROP rules for the Blacklist on both INPUT (Router protection) and FORWARD (LAN protection), but explicitly allows VPN tunnels (tun+) and LAN traffic (10.0.0.0/8).
 
 **firewall_stats.sh**: Runs hourly. It reads the iptables counters, calculates the delta from the last hour, and updates a persistent "Lifetime Total" file stored on disk.
+
+## 📺 Real-Time Monitor
+
+Includes a dashboard script to view blocking statistics in real-time directly from the terminal.
+
+### Installation
+Copy `scripts/firewall_monitor.sh` to `/opt/bin/firewall_monitor` (note: remove extension for easier typing) and make executable:
+```bash
+cp scripts/firewall_monitor.sh /opt/bin/firewall_monitor
+chmod +x /opt/bin/firewall_monitor
+```
