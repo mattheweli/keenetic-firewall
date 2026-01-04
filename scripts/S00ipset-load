@@ -1,0 +1,80 @@
+#!/bin/sh
+
+# ==============================================================================
+# IPSET LOADER
+# Description: Loads IPSET blocklists at boot (Download or Restore from Backup)
+# Place in: /opt/etc/init.d/S00ipset-load
+# ==============================================================================
+
+export PATH=/opt/bin:/opt/sbin:/usr/bin:/usr/sbin:/bin:/sbin
+
+IPSET_NAME="FirewallBlock"
+# Default: FireHOL Level 1 (Cybercrime, Botnets, etc.)
+BLOCKLIST_URL="https://iplists.firehol.org/files/firehol_level1.netset"
+BACKUP_FILE="/opt/etc/firewall_blocklist.save"
+LOG_TAG="Firewall_Boot"
+
+start() {
+    logger -t "$LOG_TAG" "Starting blocklist sequence..."
+
+    # 1. Create the set in RAM if missing
+    if ! ipset list -n "$IPSET_NAME" >/dev/null 2>&1; then
+        ipset create "$IPSET_NAME" hash:net hashsize 16384 maxelem 131072
+        logger -t "$LOG_TAG" "Created set: $IPSET_NAME"
+    fi
+
+    # 2. Try to download updated list
+    if wget -q -O /tmp/blocklist.tmp "$BLOCKLIST_URL"; then
+        logger -t "$LOG_TAG" "Download successful. Processing..."
+        
+        # Flush old entries
+        ipset flush "$IPSET_NAME"
+        
+        # Fast Parsing & Atomic Restore
+        # Removes comments, empty lines, and the dangerous 0.0.0.0/8
+        cat /tmp/blocklist.tmp \
+            | grep -vE "^#|^$|0.0.0.0" \
+            | sed "s/^/add $IPSET_NAME /" \
+            | ipset restore -!
+
+        # Save to disk for future reboots
+        ipset save "$IPSET_NAME" > "$BACKUP_FILE"
+        rm /tmp/blocklist.tmp
+        logger -t "$LOG_TAG" "Blocklist loaded and saved."
+    
+    else
+        # 3. Fallback: No Internet? Use Backup.
+        logger -t "$LOG_TAG" "Download failed. Attempting local restore..."
+        
+        if [ -f "$BACKUP_FILE" ]; then
+            ipset restore -! < "$BACKUP_FILE"
+            LINES=$(wc -l < "$BACKUP_FILE")
+            logger -t "$LOG_TAG" "Restored $LINES rules from local backup."
+        else
+            logger -t "$LOG_TAG" "CRITICAL: No backup found. Firewall set is empty."
+        fi
+    fi
+
+    # 4. Force Firewall Rules Reload
+    if [ -x /opt/etc/ndm/netfilter.d/100-firewall.sh ]; then
+        export table=filter
+        /opt/etc/ndm/netfilter.d/100-firewall.sh
+        logger -t "$LOG_TAG" "Netfilter rules applied."
+    fi
+}
+
+case "$1" in
+    start)
+        start
+        ;;
+    stop)
+        ipset save "$IPSET_NAME" > "$BACKUP_FILE"
+        ;;
+    restart)
+        start
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|restart}"
+        exit 1
+        ;;
+esac
