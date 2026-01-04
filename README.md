@@ -42,3 +42,11 @@ Copy `scripts/firewall_stats.sh` to `/opt/bin/firewall_stats.sh` and make it exe
 Add the logger to crontab to run every hour:
 ```bash
 echo "1 * * * * root /opt/bin/firewall_stats.sh > /dev/null 2>&1" >> /opt/etc/crontab
+```
+
+## 📊 How it works
+**S00ipset-load**: Starts at boot, creates the FirewallBlock set, downloads the list (default: FireHOL Level 1), sanitizes it, and loads it using ipset restore (milliseconds).
+
+**100-firewall.sh**: Hooks into NDM. It applies DROP rules for the Blacklist on both INPUT (Router protection) and FORWARD (LAN protection), but explicitly allows VPN tunnels (tun+) and LAN traffic (10.0.0.0/8).
+
+**firewall_stats.sh**: Runs hourly. It reads the iptables counters, calculates the delta from the last hour, and updates a persistent "Lifetime Total" file stored on disk.
