@@ -1,25 +1,45 @@
 #!/bin/sh
 
 # ==============================================================================
-# KEENETIC FIREWALL HOOK
+# KEENETIC FIREWALL HOOK (DUAL LIST)
 # Description: Integrates IPSET blocklists with Keenetic NDM Netfilter.
-#              Protect INPUT and FORWARD chains.
-# Note: NAT is handled natively by Keenetic NDM (use "ip nat ..." in CLI).
+#              Manages both downloaded lists and local VPN bans.
 # ==============================================================================
 
-IPSET_NAME="FirewallBlock"
+# 1. LISTA ESTERNA (Quella da 20k+ IP, gestita da script esterno)
+IPSET_MAIN="FirewallBlock"
+
+# 2. LISTA LOCALE (Quella generata dallo scan dei log VPN)
+IPSET_VPN="VPNBlock"
+VPN_BANNED_FILE="/opt/etc/vpn_banned_ips.txt"
 
 # --- SECTION: FILTER TABLE ONLY ---
 [ "$table" != "filter" ] && exit 0
 
-# Safety check: if IPSET is missing, do nothing.
-ipset list -n "$IPSET_NAME" >/dev/null 2>&1 || exit 0
+# --- INIZIALIZZAZIONE IPSET LOCALE ---
+# Creiamo il set per la VPN se non esiste (hash:ip perché sono IP singoli)
+ipset create "$IPSET_VPN" hash:ip hashsize 1024 maxelem 65536 -exist 2>/dev/null
 
-# --- A. CLEANUP (Avoid Duplicates) ---
-iptables -D INPUT -m set --match-set "$IPSET_NAME" src -j DROP 2>/dev/null
-iptables -D FORWARD -m set --match-set "$IPSET_NAME" src -j DROP 2>/dev/null
+# --- RIPRISTINO PERSISTENZA (Fondamentale al riavvio) ---
+# Se il set è vuoto ma abbiamo un file di salvataggio, ricarichiamo gli IP
+if [ -f "$VPN_BANNED_FILE" ]; then
+    # Leggiamo il file e aggiungiamo silenziosamente gli IP al set
+    while read -r ip; do
+        [ -n "$ip" ] && ipset add "$IPSET_VPN" "$ip" -exist 2>/dev/null
+    done < "$VPN_BANNED_FILE"
+fi
 
-# Remove old whitelists to ensure correct ordering on reload
+# Verifica di sicurezza: se il set Main non esiste, non applicare le sue regole (ma applica VPNBlock)
+MAIN_EXISTS=0
+ipset list -n "$IPSET_MAIN" >/dev/null 2>&1 && MAIN_EXISTS=1
+
+# --- A. CLEANUP (Pulizia vecchie regole) ---
+iptables -D INPUT -m set --match-set "$IPSET_MAIN" src -j DROP 2>/dev/null
+iptables -D FORWARD -m set --match-set "$IPSET_MAIN" src -j DROP 2>/dev/null
+iptables -D INPUT -m set --match-set "$IPSET_VPN" src -j DROP 2>/dev/null
+iptables -D FORWARD -m set --match-set "$IPSET_VPN" src -j DROP 2>/dev/null
+
+# Pulizia whitelist
 iptables -D INPUT -s 10.0.0.0/8 -j ACCEPT 2>/dev/null
 iptables -D FORWARD -s 10.0.0.0/8 -j ACCEPT 2>/dev/null
 iptables -D FORWARD -i tun+ -j ACCEPT 2>/dev/null
@@ -28,35 +48,40 @@ iptables -D INPUT -i lo -j ACCEPT 2>/dev/null
 iptables -D INPUT -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null
 iptables -D FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null
 
-# --- B. APPLY RULES (Reverse Order for iptables -I) ---
+# --- B. APPLICAZIONE REGOLE (Ordine Inverso - LIFO) ---
 
 # === FORWARD CHAIN (LAN/VPN -> Internet) ===
 
-# 4. BLOCK: Drop traffic from Blacklist
-iptables -I FORWARD -m set --match-set "$IPSET_NAME" src -j DROP
+# 5. BLOCK: Traffico dalla lista principale (Internet)
+[ "$MAIN_EXISTS" -eq 1 ] && iptables -I FORWARD -m set --match-set "$IPSET_MAIN" src -j DROP
 
-# 3. WHITELIST: VPN Interfaces (Universal)
-# Allows traffic from ANY 'tun' interface (OpenVPN/WireGuard)
+# 4. BLOCK: Traffico dalla lista VPN (Attaccanti specifici)
+iptables -I FORWARD -m set --match-set "$IPSET_VPN" src -j DROP
+
+# 3. WHITELIST: Interfacce VPN (Permetti traffico legittimo attraverso il tunnel)
 iptables -I FORWARD -i tun+ -j ACCEPT
 
-# 2. WHITELIST: Private Networks (LAN)
+# 2. WHITELIST: Reti Private (LAN)
 iptables -I FORWARD -s 10.0.0.0/8 -j ACCEPT
 
-# 1. PRIORITY: Established Connections
+# 1. PRIORITY: Connessioni Stabilite
 iptables -I FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT
 
 
-# === INPUT CHAIN (Traffic to Router) ===
+# === INPUT CHAIN (Verso il Router) ===
 
-# 4. BLOCK: Drop traffic from Blacklist
-iptables -I INPUT -m set --match-set "$IPSET_NAME" src -j DROP
+# 5. BLOCK: Traffico dalla lista principale
+[ "$MAIN_EXISTS" -eq 1 ] && iptables -I INPUT -m set --match-set "$IPSET_MAIN" src -j DROP
 
-# 3. WHITELIST: VPN Interfaces
+# 4. BLOCK: Traffico dalla lista VPN
+iptables -I INPUT -m set --match-set "$IPSET_VPN" src -j DROP
+
+# 3. WHITELIST: Interfacce VPN
 iptables -I INPUT -i tun+ -j ACCEPT
 
 # 2. WHITELIST: LAN & Localhost
 iptables -I INPUT -s 10.0.0.0/8 -j ACCEPT
 iptables -I INPUT -i lo -j ACCEPT
 
-# 1. PRIORITY: Established Connections
+# 1. PRIORITY: Connessioni Stabilite
 iptables -I INPUT -m state --state RELATED,ESTABLISHED -j ACCEPT
