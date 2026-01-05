@@ -1,9 +1,10 @@
 #!/bin/sh
 
 # ==============================================================================
-# BLOCKLIST UPDATER (ZERO DOWNTIME & BOOT LOADER)
-# Description: Updates IPSET using the atomic SWAP method.
-#              Acts as a fallback loader if internet is down (Boot safe).
+# BLOCKLIST UPDATER (ZERO DOWNTIME & DEDUPLICATION)
+# Description: Updates IPSET using atomic SWAP.
+#              Performs deep cleanup of VPN list (removes overlaps).
+#              Acts as a fallback loader if internet is down.
 # ==============================================================================
 
 export PATH=/opt/bin:/opt/sbin:/usr/bin:/usr/sbin:/bin:/sbin
@@ -14,6 +15,10 @@ IPSET_TMP_NAME="FirewallBlock_TMP"
 BLOCKLIST_URL="https://iplists.firehol.org/files/firehol_level1.netset"
 BACKUP_FILE="/opt/etc/firewall_blocklist.save"
 LOG_TAG="Firewall_Update"
+
+# VPN List Config (For Cleanup)
+IPSET_VPN="VPNBlock"
+VPN_FILE="/opt/etc/vpn_banned_ips.txt"
 
 # 1. Ensure Main Set Exists (Boot requirement)
 if ! ipset list -n "$IPSET_NAME" >/dev/null 2>&1; then
@@ -53,7 +58,7 @@ if [ "$DOWNLOAD_SUCCESS" -eq 1 ]; then
         COUNT=$(ipset list "$IPSET_NAME" | grep -E '^[0-9]' | wc -l)
         logger -t "$LOG_TAG" "Success: List updated via SWAP. Entries: $COUNT"
         
-        # Cleanup
+        # Cleanup temp
         ipset destroy "$IPSET_TMP_NAME"
         rm /tmp/blocklist_update.tmp
     else
@@ -78,7 +83,34 @@ else
     fi
 fi
 
-# 4. Trigger Firewall Hook (Just in case rules were flushed)
+# ==============================================================================
+# 4. DEEP DEDUPLICATION (Clean VPN List)
+# ==============================================================================
+# Checks if IPs in VPNBlock are already covered by the Main List (FirewallBlock)
+# ==============================================================================
+
+if ipset list -n "$IPSET_VPN" >/dev/null 2>&1; then
+    CLEAN_COUNT=0
+    # Iterate through VPN IPs
+    for ip in $(ipset list "$IPSET_VPN" | grep -E '^[0-9]'); do
+        # "test" returns 0 (true) if the IP is inside ANY subnet of the main list
+        if ipset test "$IPSET_NAME" "$ip" >/dev/null 2>&1; then
+            # Remove from VPN set (it's redundant)
+            ipset del "$IPSET_VPN" "$ip"
+            CLEAN_COUNT=$((CLEAN_COUNT + 1))
+        fi
+    done
+
+    # If we removed anything, save the clean list to file so it survives reboot
+    if [ "$CLEAN_COUNT" -gt 0 ]; then
+        logger -t "$LOG_TAG" "Optimization: Removed $CLEAN_COUNT redundant IPs from $IPSET_VPN (already in Main List)."
+        ipset list "$IPSET_VPN" | grep -E '^[0-9]' > "$VPN_FILE"
+    fi
+fi
+
+# ==============================================================================
+# 5. TRIGGER FIREWALL HOOK
+# ==============================================================================
 if [ -x /opt/etc/ndm/netfilter.d/100-firewall.sh ]; then
     export table=filter
     /opt/etc/ndm/netfilter.d/100-firewall.sh >/dev/null 2>&1
