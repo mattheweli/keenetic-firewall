@@ -8,22 +8,22 @@ IPSET_NAME="FirewallBlock"
 LOG_TAG="Firewall_Boot"
 
 start() {
-    # 1. CREAZIONE IMMEDIATA (Set Vuoto)
-    # Creiamo il set subito, altrimenti 100-firewall.sh esce perché non lo trova.
+    # 1. IMMEDIATE CREATION (Empty Set)
+    # Create set immediately, otherwise 100-firewall.sh exits because it can't find it.
     if ! ipset list -n "$IPSET_NAME" >/dev/null 2>&1; then
         ipset create "$IPSET_NAME" hash:net hashsize 16384 maxelem 131072
         logger -t "$LOG_TAG" "Empty IPSET created immediately."
     fi
 
-    # 2. APPLICAZIONE REGOLE FIREWALL
-    # Forziamo il caricamento delle regole iptables ora che il set esiste.
+    # 2. APPLY FIREWALL RULES
+    # Force loading iptables rules now that the set exists.
     if [ -x /opt/etc/ndm/netfilter.d/100-firewall.sh ]; then
         table=filter /opt/etc/ndm/netfilter.d/100-firewall.sh
         logger -t "$LOG_TAG" "Firewall rules applied (on empty set)."
     fi
 
-    # 3. AGGIORNAMENTO RITARDATO (Background)
-    # Ora possiamo aspettare con calma il download senza bloccare il boot.
+    # 3. DELAYED UPDATE (Background)
+    # Now we can wait for the download without blocking boot.
     (
         logger -t "$LOG_TAG" "Boot sequence detected. Waiting 180s for internet stability..."
         
