@@ -1,12 +1,11 @@
 #!/bin/sh
 
 # ==============================================================================
-# BLOCKLIST UPDATER (MULTI-SOURCE, ZERO DOWNTIME & DEDUPLICATION)
-# Description: Downloads IPs from multiple bad-reputation sources.
-#              Merges lists and removes duplicates (deduplication).
+# BLOCKLIST UPDATER (MULTI-SOURCE, DEDUPLICATION & STATS)
+# Description: Downloads IPs from multiple sources.
+#              Merges lists, removes duplicates, calculates changes (+/-).
 #              Updates IPSET using atomic SWAP.
-#              Performs deep cleanup of VPN list (removes overlaps).
-#              Acts as a fallback loader if internet is down.
+#              Performs deep cleanup of VPN list.
 # ==============================================================================
 
 export PATH=/opt/bin:/opt/sbin:/usr/bin:/usr/sbin:/bin:/sbin
@@ -15,10 +14,7 @@ export PATH=/opt/bin:/opt/sbin:/usr/bin:/usr/sbin:/bin:/sbin
 IPSET_NAME="FirewallBlock"
 IPSET_TMP_NAME="FirewallBlock_TMP"
 
-# List of URLs to download (Space separated)
-# 1. Firehol Level 1 (Aggregated high risk)
-# 2. GreenSnow (Brute force attacks)
-# 3. CINS Army (Bad reputation IPs)
+# List of URLs
 BLOCKLIST_URLS="
 https://iplists.firehol.org/files/firehol_level1.netset
 https://blocklist.greensnow.co/greensnow.txt
@@ -28,26 +24,24 @@ http://cinsscore.com/list/ci-badguys.txt
 BACKUP_FILE="/opt/etc/firewall_blocklist.save"
 LOG_TAG="Firewall_Update"
 
-# VPN List Config (For Cleanup)
+# VPN List Config
 IPSET_VPN="VPNBlock"
 VPN_FILE="/opt/etc/vpn_banned_ips.txt"
 
-# 1. Ensure Main Set Exists (Boot requirement)
+# 1. Ensure Main Set Exists
 if ! ipset list -n "$IPSET_NAME" >/dev/null 2>&1; then
-    # Create empty set if missing
     ipset create "$IPSET_NAME" hash:net hashsize 16384 maxelem 131072 -exist
     logger -t "$LOG_TAG" "Created initial empty set: $IPSET_NAME"
 fi
 
 # 2. Download & Merge Logic
 RAW_FILE="/tmp/blocklist_raw.tmp"
-: > "$RAW_FILE" # Create/Empty the temp file
+: > "$RAW_FILE"
 
 DOWNLOAD_COUNT=0
 logger -t "$LOG_TAG" "Starting download from multiple sources..."
 
 for URL in $BLOCKLIST_URLS; do
-    # Append content to RAW_FILE
     if wget -q -O - "$URL" >> "$RAW_FILE"; then
         logger -t "$LOG_TAG" "Downloaded: $URL"
         DOWNLOAD_COUNT=$((DOWNLOAD_COUNT + 1))
@@ -57,31 +51,44 @@ for URL in $BLOCKLIST_URLS; do
 done
 
 # 3. Logic Branch: UPDATE (Swap) vs RESTORE (Backup)
-# Proceed only if we downloaded at least one list and file is not empty
 if [ "$DOWNLOAD_COUNT" -gt 0 ] && [ -s "$RAW_FILE" ]; then
     # --- METHOD A: ZERO DOWNTIME UPDATE ---
     
-    # Create temp set
+    # A. Get CURRENT count (Before update)
+    if ipset list -n "$IPSET_NAME" >/dev/null 2>&1; then
+        OLD_COUNT=$(ipset list "$IPSET_NAME" | grep -E '^[0-9]' | wc -l)
+    else
+        OLD_COUNT=0
+    fi
+
+    # B. Prepare New List
     ipset create "$IPSET_TMP_NAME" hash:net hashsize 16384 maxelem 131072 -exist
     ipset flush "$IPSET_TMP_NAME"
 
     # Load data into temp set WITH DEDUPLICATION
-    # grep: removes comments, empty lines, and localhost/broadcast
-    # sort -u: SORTS and REMOVES DUPLICATES (Merge)
     cat "$RAW_FILE" \
         | grep -vE "^#|^$|0.0.0.0|127.0.0.1" \
         | sort -u \
         | sed "s/^/add $IPSET_TMP_NAME /" \
         | ipset restore -!
 
-    # Atomic Swap
+    # C. Atomic Swap
     if ipset swap "$IPSET_TMP_NAME" "$IPSET_NAME"; then
         # Save new backup
         ipset save "$IPSET_NAME" > "$BACKUP_FILE"
         
-        # Count entries (Fast method)
-        COUNT=$(ipset list "$IPSET_NAME" | grep -E '^[0-9]' | wc -l)
-        logger -t "$LOG_TAG" "Success: Merged list updated via SWAP. Total Unique IPs: $COUNT"
+        # D. Get NEW count and Calculate DELTA
+        NEW_COUNT=$(ipset list "$IPSET_NAME" | grep -E '^[0-9]' | wc -l)
+        DELTA=$((NEW_COUNT - OLD_COUNT))
+        
+        # Format Delta string (add + sign if positive)
+        if [ "$DELTA" -ge 0 ]; then
+            DELTA_STR="+$DELTA"
+        else
+            DELTA_STR="$DELTA"
+        fi
+
+        logger -t "$LOG_TAG" "Success. Total IPs: $NEW_COUNT (Change: $DELTA_STR vs previous)"
         
         # Cleanup temp
         ipset destroy "$IPSET_TMP_NAME"
@@ -95,8 +102,6 @@ if [ "$DOWNLOAD_COUNT" -gt 0 ] && [ -s "$RAW_FILE" ]; then
 
 else
     # --- METHOD B: RESTORE FROM BACKUP (Offline/Boot Mode) ---
-    
-    # Check if main set is empty
     CURRENT_COUNT=$(ipset list "$IPSET_NAME" | grep -E '^[0-9]' | wc -l)
     
     if [ "$CURRENT_COUNT" -lt 10 ] && [ -f "$BACKUP_FILE" ]; then
@@ -104,10 +109,8 @@ else
         ipset restore -! < "$BACKUP_FILE"
         logger -t "$LOG_TAG" "Backup restored."
     else
-        logger -t "$LOG_TAG" "Download failed, but keeping existing memory list."
+        logger -t "$LOG_TAG" "Download failed, keeping existing list."
     fi
-    
-    # Clean up temp file if it exists but failed
     [ -f "$RAW_FILE" ] && rm "$RAW_FILE"
 fi
 
@@ -116,11 +119,8 @@ fi
 # ==============================================================================
 if ipset list -n "$IPSET_VPN" >/dev/null 2>&1; then
     CLEAN_COUNT=0
-    # Iterate through VPN IPs
     for ip in $(ipset list "$IPSET_VPN" | grep -E '^[0-9]'); do
-        # "test" returns 0 (true) if the IP is inside ANY subnet of the main list
         if ipset test "$IPSET_NAME" "$ip" >/dev/null 2>&1; then
-            # Remove from VPN set (it's redundant)
             ipset del "$IPSET_VPN" "$ip"
             CLEAN_COUNT=$((CLEAN_COUNT + 1))
         fi
