@@ -1,9 +1,9 @@
 #!/bin/sh
 
 # ==============================================================================
-# KEENETIC FIREWALL STATS v2.1.0 (STABLE - CACHING EDITION)
-# Features: AbuseIPDB Caching (SQLite), Stateful IP Tracking, Auto-Theme
-# Change Log: v2.1.0 - Added local caching for AbuseIPDB lookups to reduce API usage
+# KEENETIC FIREWALL STATS v2.1.1 (STABLE - LOGGING & CACHING)
+# Features: AbuseIPDB Caching, System Logging, Stateful Tracking, Auto-Theme
+# Change Log: v2.1.1 - Re-introduced System Logging (logger) for Cron monitoring
 # ==============================================================================
 
 export PATH=/opt/bin:/opt/sbin:/usr/bin:/usr/sbin:/bin:/sbin
@@ -18,21 +18,32 @@ LISTS="FirewallBlock VPNBlock"
 DIFF_FILE_MAIN="/opt/etc/firewall_main_diff.dat"
 IP_LAST_STATE="/opt/etc/firewall_ip_counters.dat"
 
-# AbuseIPDB Key (Configured)
+# Logging Configuration
+LOG_TAG="FW_Stats"
+
+# AbuseIPDB Key (Example Configured)
 ABUSEIPDB_KEY="240310f3869e8b852bf5f89ecd7af5d59dae631fa82499247de2d28a755cd4c04ae064fbff708ff2"
 
 mkdir -p "$WEB_DIR"
-DATE_CMD="/opt/bin/date"; [ ! -x "$DATE_CMD" ] && DATE_CMD="date"
 
-# 1. DATABASE INITIALIZATION (Added ip_info table for caching)
+# Date Command Selection (Coreutils check)
+DATE_CMD="/opt/bin/date"
+if [ ! -x "$DATE_CMD" ]; then DATE_CMD="date"; fi
+
+# Helper for system logging
+log() {
+    logger -t "$LOG_TAG" "$1"
+}
+
+# 1. DATABASE INITIALIZATION
 init_db() {
     if [ ! -f "$DB_FILE" ]; then
+        log "Initializing new database..."
         sqlite3 "$DB_FILE" "CREATE TABLE drops (id INTEGER PRIMARY KEY, timestamp INTEGER, list_name TEXT, count INTEGER);"
         sqlite3 "$DB_FILE" "CREATE INDEX idx_ts ON drops(timestamp);"
         sqlite3 "$DB_FILE" "CREATE INDEX idx_list ON drops(list_name);"
     fi
     
-    # Check/Create ip_drops table
     HAS_IP_TABLE=$(sqlite3 "$DB_FILE" "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='ip_drops';")
     if [ "$HAS_IP_TABLE" -eq 0 ]; then
         sqlite3 "$DB_FILE" "CREATE TABLE ip_drops (timestamp INTEGER, ip TEXT, count INTEGER);"
@@ -40,7 +51,6 @@ init_db() {
         sqlite3 "$DB_FILE" "CREATE INDEX idx_ip_ip ON ip_drops(ip);"
     fi
 
-    # Check/Create ip_info table (CACHE)
     HAS_CACHE_TABLE=$(sqlite3 "$DB_FILE" "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='ip_info';")
     if [ "$HAS_CACHE_TABLE" -eq 0 ]; then
         sqlite3 "$DB_FILE" "CREATE TABLE ip_info (ip TEXT PRIMARY KEY, country TEXT, risk INTEGER, domain TEXT, updated INTEGER);"
@@ -76,12 +86,15 @@ SQL_IMPORT="/tmp/ip_inserts.sql"
 ipset list FirewallBlock | grep "packets" | sed -n 's/^\([^ ]*\) .*packets \([0-9]*\) .*/\1 \2/p' | awk '$2 > 0' | sort > "$CURRENT_DUMP"
 DB_IS_EMPTY=$(sqlite3 "$DB_FILE" "SELECT count(*) FROM ip_drops;")
 
+NEW_RECORDS=0
 if [ ! -f "$IP_LAST_STATE" ] || [ "$DB_IS_EMPTY" -eq 0 ]; then
-    # First run: Import baseline
+    # First run
     awk -v now="$NOW" '{printf "INSERT INTO ip_drops (timestamp, ip, count) VALUES (%d, \"%s\", %d);\n", now, $1, $2;}' "$CURRENT_DUMP" > "$SQL_IMPORT"
+    NEW_RECORDS=$(wc -l < "$SQL_IMPORT")
 else
-    # Calculate Deltas
+    # Delta calculation
     awk -v now="$NOW" 'FNR==NR { old[$1] = $2; next } { prev = (old[$1] ? old[$1] : 0); curr = $2; delta = curr - prev; if (delta < 0) delta = curr; if (delta > 0) printf "INSERT INTO ip_drops (timestamp, ip, count) VALUES (%d, \"%s\", %d);\n", now, $1, delta; }' "$IP_LAST_STATE" "$CURRENT_DUMP" > "$SQL_IMPORT"
+    if [ -f "$SQL_IMPORT" ]; then NEW_RECORDS=$(wc -l < "$SQL_IMPORT"); fi
 fi
 cp "$CURRENT_DUMP" "$IP_LAST_STATE"
 
@@ -91,6 +104,7 @@ if [ -s "$SQL_IMPORT" ]; then
     echo "COMMIT;" >> /tmp/ip_trans.sql
     sqlite3 "$DB_FILE" < /tmp/ip_trans.sql
     rm /tmp/ip_trans.sql
+    log "Updated stats: $NEW_RECORDS IPs had new drops."
 fi
 rm "$CURRENT_DUMP" "$SQL_IMPORT" 2>/dev/null
 
@@ -129,16 +143,15 @@ get_top10_period() {
         COUNT=$(echo "$LINE" | cut -d'|' -f2)
         CLEAN_IP=$(echo "$IP" | cut -d'/' -f1)
         
-        # 1. CHECK CACHE FIRST
+        # 1. CHECK CACHE
         CACHE_DATA=$(sqlite3 -separator "|" "$DB_FILE" "SELECT country, risk, domain FROM ip_info WHERE ip='$CLEAN_IP';")
         
         if [ -n "$CACHE_DATA" ]; then
-            # HIT: Use cached data
             COUNTRY=$(echo "$CACHE_DATA" | cut -d'|' -f1)
             SCORE=$(echo "$CACHE_DATA" | cut -d'|' -f2)
             DOMAIN=$(echo "$CACHE_DATA" | cut -d'|' -f3)
         else
-            # MISS: Perform API Lookup
+            # 2. API LOOKUP (If not in cache)
             JSON_RESP=$(curl -s -m 3 -G https://api.abuseipdb.com/api/v2/check --data-urlencode "ipAddress=$CLEAN_IP" -d maxAgeInDays=90 -H "Key: $ABUSEIPDB_KEY" -H "Accept: application/json" || echo "")
             
             COUNTRY=$(echo "$JSON_RESP" | grep -o '"countryCode":"[^"]*"' | cut -d'"' -f4)
@@ -146,13 +159,11 @@ get_top10_period() {
             DOMAIN=$(echo "$JSON_RESP" | grep -o '"domain":"[^"]*"' | cut -d'"' -f4)
             [ -z "$SCORE" ] && SCORE=0
             
-            # Save to Cache (if lookup was successful/valid IP)
             if [ -n "$COUNTRY" ]; then
                sqlite3 "$DB_FILE" "INSERT OR REPLACE INTO ip_info (ip, country, risk, domain, updated) VALUES ('$CLEAN_IP', '$COUNTRY', $SCORE, '$DOMAIN', $NOW);"
             fi
         fi
         
-        # UI Rendering
         if [ "$SCORE" -ge 50 ]; then
             META_INFO="<span style='color:var(--red); font-weight:bold;'>Risk: ${SCORE}%</span> - $COUNTRY<br><small>$DOMAIN</small>"
         else
@@ -174,8 +185,6 @@ TB_TOP10_ALL=$(get_top10_period 0)
 # --- CLEANUP OLD DATA ---
 sqlite3 "$DB_FILE" "DELETE FROM drops WHERE timestamp < $((NOW - 31536000));"
 sqlite3 "$DB_FILE" "DELETE FROM ip_drops WHERE timestamp < $((NOW - 31536000));"
-# Keep cache fresh (delete entries older than 90 days if you want, or keep forever)
-# sqlite3 "$DB_FILE" "DELETE FROM ip_info WHERE updated < $((NOW - 7776000));"
 
 # --- WRITE JSON DATA ---
 DATE_UPDATE=$($DATE_CMD "+%d-%m-%Y %H:%M:%S")
