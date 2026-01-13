@@ -394,4 +394,24 @@ cat <<'HTML_EOF' > "$HTML_FILE"
     
     <script src="firewall_data.js"></script>
     <script>
-        function showTab(id) { document.querySelectorAll('.tab-content').forEach(e => e.classList.remove('active')); document.querySelectorAll('.tab-btn').forEach(e => e.classList.remove('active')); document.getElementById('tb_top10_'+id).classList.add('active');
+        function showTab(id) { document.querySelectorAll('.tab-content').forEach(e => e.classList.remove('active')); document.querySelectorAll('.tab-btn').forEach(e => e.classList.remove('active')); document.getElementById('tb_top10_'+id).classList.add('active'); event.target.classList.add('active'); }
+        if (typeof window.FW_DATA !== 'undefined') {
+            const d = window.FW_DATA;
+            const setDiff = (elId, val) => { const el = document.getElementById(elId); if(val==='+0'||val==='0'||val==='='){ el.innerHTML=`<span class="diff eq">-</span>`; } else if(val.includes('+')){ el.innerHTML=`<span class="diff pos">${val}</span>`; } else if(val.includes('-')){ el.innerHTML=`<span class="diff neg">${val}</span>`; } else { el.innerHTML=`<span class="diff eq">-</span>`; } };
+            document.getElementById('size_main').innerText = d.lists.main; setDiff('diff_main', d.lists.main_diff);
+            document.getElementById('size_vpn').innerText = d.lists.vpn; setDiff('diff_vpn', d.lists.vpn_diff);
+            
+            document.getElementById('lifetime').innerText = d.lifetime; 
+            
+            document.getElementById('uptime').innerText = d.uptime; document.getElementById('last_update').innerText = d.updated;
+            document.getElementById('tb_hourly').innerHTML = d.tables.hourly; document.getElementById('tb_daily').innerHTML = d.tables.daily;
+            document.getElementById('tb_monthly').innerHTML = d.tables.monthly; document.getElementById('tb_yearly').innerHTML = d.tables.yearly;
+            document.getElementById('tb_top10_24h').innerHTML = d.tables.top10_24h; document.getElementById('tb_top10_30d').innerHTML = d.tables.top10_30d;
+            document.getElementById('tb_top10_1y').innerHTML = d.tables.top10_1y; document.getElementById('tb_top10_all').innerHTML = d.tables.top10_all;
+        }
+    </script>
+</body>
+</html>
+HTML_EOF
+chmod 644 "$HTML_FILE"
+fi
