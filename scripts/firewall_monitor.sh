@@ -1,86 +1,174 @@
 #!/bin/sh
 
 # ==============================================================================
-# FIREWALL LIVE MONITOR
-# Description: Shows real-time blocking statistics in the terminal.
-# Usage: Run 'firewall_monitor' from CLI. Press CTRL+C to exit.
+# KEENETIC FIREWALL MONITOR v3.0.2 (ADAPTIVE SCAN)
+# Features: 
+#   - ADAPTIVE POLL: Scans fast (4s) when list is empty, slow (30s) when full.
+#   - SESSION TOP 5: Shows active attackers during this script run.
+#   - DUAL STACK: Monitors IPv4 and IPv6.
 # ==============================================================================
 
 export PATH=/opt/bin:/opt/sbin:/usr/bin:/usr/sbin:/bin:/sbin
 
-IPSET_NAME="FirewallBlock"
-REFRESH_RATE=2
+# --- CONFIGURATION ---
+IPSET_V4="FirewallBlock"
+IPSET_V6="FirewallBlock6"
+DB_FILE="/opt/etc/firewall_stats.db"
+REFRESH_RATE=2       # Base display update (seconds)
 
-# Colors
-BOLD="\e[1m"
-RED="\e[31m"
-GREEN="\e[32m"
-YELLOW="\e[33m"
-CYAN="\e[36m"
-RESET="\e[0m"
+# Scan Cycles (multiplied by REFRESH_RATE)
+SCAN_FAST=2          # 2 * 2s = 4s (When list is < 5 IPs)
+SCAN_SLOW=15         # 15 * 2s = 30s (When list is full)
 
-# Trap CTRL+C to exit cleanly
-trap "echo; echo 'Monitor stopped.'; exit 0" INT
+# Temp files for differential analysis
+SNAP_START="/tmp/fw_mon_start.tmp"
+SNAP_CURR="/tmp/fw_mon_curr.tmp"
 
+# --- COLORS ---
+ESC=$(printf '\033')
+RESET="${ESC}[0m"
+BOLD="${ESC}[1m"
+RED="${ESC}[31m"; GREEN="${ESC}[32m"; YELLOW="${ESC}[33m"
+BLUE="${ESC}[34m"; CYAN="${ESC}[36m"; DIM="${ESC}[2m"
+
+# Cleanup on exit
+cleanup() {
+    rm -f "$SNAP_START" "$SNAP_CURR"
+    echo -e "${RESET}"
+    echo "Monitor stopped."
+    exit 0
+}
+trap cleanup INT TERM
+
+# --- HELPER FUNCTIONS ---
+format_num() { echo "$1" | awk '{ printf "%'\''d", $1 }'; }
+
+get_iptables_count() {
+    $1 -L "$2" -v -x -n 2>/dev/null | grep -w "match-set $3" | awk '{sum+=$1} END {print sum+0}'
+}
+
+# Extracts clean "IP COUNT" list from ipset
+dump_ipset_clean() {
+    ipset list "$1" 2>/dev/null | grep "packets" | sed -n 's/^\([^ ]*\) .*packets \([0-9]*\) .*/\1 \2/p'
+}
+
+# --- INIT SESSION ---
+clear
+echo -e "${BOLD}Initializing Session Monitor...${RESET}"
+echo -e "${DIM}Taking baseline snapshot...${RESET}"
+
+# 1. Take Baseline Snapshot (Start of Session)
+: > "$SNAP_START"
+{
+    dump_ipset_clean "$IPSET_V4"
+    dump_ipset_clean "$IPSET_V6"
+} >> "$SNAP_START"
+
+# 2. Initial Counters
+START_V4_IN=$(get_iptables_count "iptables" "BLOCKLIST_IN" "$IPSET_V4")
+START_V4_FW=$(get_iptables_count "iptables" "BLOCKLIST_FWD" "$IPSET_V4")
+START_V6_IN=$(get_iptables_count "ip6tables" "BLOCKLIST_IN6" "$IPSET_V6")
+START_V6_FW=$(get_iptables_count "ip6tables" "BLOCKLIST_FWD6" "$IPSET_V6")
+
+START_TOTAL_V4=$((START_V4_IN + START_V4_FW))
+START_TOTAL_V6=$((START_V6_IN + START_V6_FW))
+
+CYCLE=0
+CURRENT_LIMIT=0 # Force immediate scan on start
+TOP5_CACHE=""
+LAST_SCAN_TIME="Pending..."
+
+# --- MAIN LOOP ---
 while true; do
-    # Clear screen
-    clear (or echo -e "\033c") 2>/dev/null || echo -e "\033c"
+    # 1. Light Task: Global Counters (Instant)
+    CUR_V4_IN=$(get_iptables_count "iptables" "BLOCKLIST_IN" "$IPSET_V4")
+    CUR_V4_FW=$(get_iptables_count "iptables" "BLOCKLIST_FWD" "$IPSET_V4")
+    CUR_V6_IN=$(get_iptables_count "ip6tables" "BLOCKLIST_IN6" "$IPSET_V6")
+    CUR_V6_FW=$(get_iptables_count "ip6tables" "BLOCKLIST_FWD6" "$IPSET_V6")
 
-    # Get Timestamp
-    NOW=$(date "+%Y-%m-%d %H:%M:%S")
+    CUR_TOT_V4=$((CUR_V4_IN + CUR_V4_FW))
+    CUR_TOT_V6=$((CUR_V6_IN + CUR_V6_FW))
 
-    # Get Counts (Fast mode with -n to avoid DNS lookups)
-    # Using iptables -v (verbose) -x (exact numbers)
-    INPUT_PKTS=$(iptables -L INPUT -v -x -n | grep "match-set $IPSET_NAME" | awk '{print $1}')
-    INPUT_BYTES=$(iptables -L INPUT -v -x -n | grep "match-set $IPSET_NAME" | awk '{print $2}')
+    SESS_V4=$((CUR_TOT_V4 - START_TOTAL_V4))
+    SESS_V6=$((CUR_TOT_V6 - START_TOTAL_V6))
     
-    FORWARD_PKTS=$(iptables -L FORWARD -v -x -n | grep "match-set $IPSET_NAME" | awk '{print $1}')
-    FORWARD_BYTES=$(iptables -L FORWARD -v -x -n | grep "match-set $IPSET_NAME" | awk '{print $2}')
-
-    # Handle empty results (if rules are missing)
-    [ -z "$INPUT_PKTS" ] && INPUT_PKTS=0
-    [ -z "$INPUT_BYTES" ] && INPUT_BYTES=0
-    [ -z "$FORWARD_PKTS" ] && FORWARD_PKTS=0
-    [ -z "$FORWARD_BYTES" ] && FORWARD_BYTES=0
-
-    # Calculate Totals
-    TOTAL_PKTS=$((INPUT_PKTS + FORWARD_PKTS))
-    
-    # Format Bytes to KB/MB for readability (Simple shell math)
-    # Note: Busybox doesn't handle floats well, keeping it simple or raw bytes
-    format_bytes() {
-        if [ "$1" -gt 1048576 ]; then
-            echo "$(( $1 / 1048576 )) MB"
-        elif [ "$1" -gt 1024 ]; then
-            echo "$(( $1 / 1024 )) KB"
+    # 2. Heavy Task: Differential Scan (Adaptive Frequency)
+    if [ "$CYCLE" -ge "$CURRENT_LIMIT" ]; then
+        STATUS_TXT="Analyzing..."
+        
+        # A. Grab Current State
+        : > "$SNAP_CURR"
+        {
+            dump_ipset_clean "$IPSET_V4"
+            dump_ipset_clean "$IPSET_V6"
+        } >> "$SNAP_CURR"
+        
+        # B. Calculate Delta
+        RAW_TOP=$(awk 'FNR==NR { start[$1]=$2; next } { diff = $2 - start[$1]; if (diff > 0) print $1, diff }' "$SNAP_START" "$SNAP_CURR" | sort -rn -k2 | head -n 5)
+        
+        # C. Adaptive Logic: If few items, scan often. If full, relax.
+        ITEM_COUNT=$(echo "$RAW_TOP" | grep -c "^")
+        if [ "$ITEM_COUNT" -lt 5 ]; then
+            CURRENT_LIMIT=$SCAN_FAST
+            FREQ_MSG="Fast Mode (4s)"
         else
-            echo "$1 Bytes"
+            CURRENT_LIMIT=$SCAN_SLOW
+            FREQ_MSG="Eco Mode (30s)"
         fi
-    }
+        
+        TOP5_CACHE=""
+        if [ -n "$RAW_TOP" ]; then
+            IFS=$'\n'
+            for line in $RAW_TOP; do
+                IP=$(echo "$line" | awk '{print $1}')
+                CNT=$(echo "$line" | awk '{print $2}')
+                
+                CC=""
+                if [ -f "$DB_FILE" ]; then
+                    CLEAN_IP=$(echo "$IP" | cut -d'/' -f1)
+                    CC=$(sqlite3 "$DB_FILE" "SELECT country FROM ip_info WHERE ip='$CLEAN_IP' LIMIT 1;" 2>/dev/null)
+                fi
+                [ -z "$CC" ] && CC="--"
+                
+                COL=$GREEN
+                [ "$CNT" -gt 20 ] && COL=$YELLOW
+                [ "$CNT" -gt 100 ] && COL=$RED
+                
+                TOP5_CACHE="${TOP5_CACHE}\n   ${CYAN}${IP}${RESET}  \t[${COL}+${CNT}${RESET}] ${DIM}${CC}${RESET}"
+            done
+            unset IFS
+        else
+            TOP5_CACHE="\n   ${DIM}(No active attacks in this session)${RESET}"
+        fi
+        
+        LAST_SCAN_TIME=$(date "+%H:%M:%S")
+        CYCLE=0
+    else
+        STATUS_TXT="Live (${FREQ_MSG})"
+        CYCLE=$((CYCLE + 1))
+    fi
 
-    INPUT_HR=$(format_bytes $INPUT_BYTES)
-    FORWARD_HR=$(format_bytes $FORWARD_BYTES)
-
-    # --- DASHBOARD UI ---
-    echo -e "${CYAN}==============================================${RESET}"
-    echo -e "${BOLD}   KEENETIC FIREWALL LIVE MONITOR ${RESET}"
-    echo -e "${CYAN}==============================================${RESET}"
-    echo -e " Time: $NOW"
-    echo -e " Refresh: ${REFRESH_RATE}s"
-    echo -e " List: $IPSET_NAME"
+    # 3. DRAW UI
+    clear
+    echo -e "${BOLD}${BLUE}╔════════════════════════════════════════════════╗${RESET}"
+    echo -e "${BOLD}${BLUE}║    KEENETIC FIREWALL SESSION MONITOR v3.0.2    ║${RESET}"
+    echo -e "${BOLD}${BLUE}╚════════════════════════════════════════════════╝${RESET}"
     echo ""
-    echo -e "${YELLOW} [ INPUT CHAIN ] ${RESET} (Attacks to Router)"
-    echo -e " Blocked Packets : ${RED}${INPUT_PKTS}${RESET}"
-    echo -e " Data Volume     : ${INPUT_HR}"
-    echo ""
-    echo -e "${YELLOW} [ FORWARD CHAIN ] ${RESET} (Attacks to LAN/IoT)"
-    echo -e " Blocked Packets : ${RED}${FORWARD_PKTS}${RESET}"
-    echo -e " Data Volume     : ${FORWARD_HR}"
-    echo ""
-    echo -e "${CYAN}----------------------------------------------${RESET}"
-    echo -e "${BOLD} TOTAL BLOCKED   : ${RED}${TOTAL_PKTS}${RESET} packets"
-    echo -e "${CYAN}==============================================${RESET}"
-    echo -e " Press [CTRL+C] to stop"
     
+    printf " %-20s ${BOLD}%-15s ${BOLD}%-15s${RESET}\n" "" "IPv4" "IPv6"
+    echo -e "${DIM} ------------------------------------------------${RESET}"
+    
+    printf " Total Drops        : ${DIM}%-15s ${DIM}%-15s${RESET}\n" "$(format_num $CUR_TOT_V4)" "$(format_num $CUR_TOT_V6)"
+    printf " Session Active     : ${BOLD}${RED}+%-14s ${RED}+%-14s${RESET}\n" "$(format_num $SESS_V4)" "$(format_num $SESS_V6)"
+    echo -e "${DIM} ------------------------------------------------${RESET}"
+    
+    echo ""
+    echo -e "${YELLOW} [ TOP ATTACKERS ] ${DIM}(Upd: $LAST_SCAN_TIME)${RESET}"
+    echo -e "$TOP5_CACHE"
+    echo ""
+    echo -e "${DIM} ------------------------------------------------${RESET}"
+    echo -e " ${BOLD}Status:${RESET} $STATUS_TXT"
+    echo -e " ${DIM}Press [Ctrl+C] to exit.${RESET}"
+
     sleep $REFRESH_RATE
 done
