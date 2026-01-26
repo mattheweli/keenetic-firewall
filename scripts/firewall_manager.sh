@@ -1,7 +1,7 @@
 #!/bin/sh
 
 # ==============================================================================
-# KEENETIC FIREWALL MANAGER v1.0
+# KEENETIC FIREWALL MANAGER v1.5
 # Central Hub to manage all firewall scripts interactively.
 # Changelog: v1.5 - Soft Trap fix (Allows Monitor to handle Ctrl+C correctly)
 # ==============================================================================
@@ -37,7 +37,7 @@ NC='\033[0m'
 show_header() {
     clear
     echo -e "${CYAN}=================================================${NC}"
-    echo -e "${WHITE}      KEENETIC FIREWALL MANAGER v1.0      ${NC}"
+    echo -e "${WHITE}      KEENETIC FIREWALL MANAGER v1.5      ${NC}"
     echo -e "${CYAN}=================================================${NC}"
 }
 
