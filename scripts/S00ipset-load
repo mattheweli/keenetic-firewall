@@ -1,5 +1,6 @@
 #!/bin/sh
 # IPSET LOADER WRAPPER (Fixed Logic)
+# v.1.0.0
 # 1. Creates empty set immediately.
 # 2. Applies firewall rules immediately.
 # 3. Updates content after delay.
