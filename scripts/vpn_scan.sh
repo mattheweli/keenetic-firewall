@@ -1,92 +1,140 @@
 #!/bin/sh
+
 # ==============================================================================
-# VPN LOG ANALYZER v1.1
-# Scans logs for OpenVPN errors and bans IPs.
-# Updates the daily diff counter for the Dashboard.
+# VPN LOG ANALYZER v1.3.1 (FULL LOGGING)
+# Features:
+# - INTERACTIVE: Echoes status to terminal.
+# - LOGGING: Logs Summary even if IPs were just skipped (already blocked).
+# - SYNC: Restores IPs from local file to RAM.
 # ==============================================================================
 
 # --- PATHS ---
 LOG_FILE="/opt/var/log/messages"
 BANNED_IPS_FILE="/opt/etc/vpn_banned_ips.txt"
-DIFF_FILE_VPN="/opt/etc/firewall_vpn_diff.dat" # Shared file with dashboard
+DIFF_FILE_VPN="/opt/etc/firewall_vpn_diff.dat"
 
 IPSET_VPN="VPNBlock"
-IPSET_MAIN="FirewallBlock" # Name of your main list
+IPSET_MAIN="FirewallBlock"
 LOG_TAG="VPN_Blocker"
 
-# Regex to find OpenVPN errors
+# Regex
 SEARCH_PATTERN='TLS handshake failed|Bad encapsulated packet length'
 
-# Create files if they don't exist
-touch "$BANNED_IPS_FILE"
+# Colors
+ESC=$(printf '\033')
+RESET="${ESC}[0m"
+BOLD="${ESC}[1m"
+RED="${ESC}[31m"; GREEN="${ESC}[32m"; YELLOW="${ESC}[33m"; CYAN="${ESC}[36m"
 
-# Check log existence
+# Counters
+CNT_RESTORED=0
+CNT_OPTIMIZED=0
+CNT_BANNED=0
+CNT_SKIPPED=0
+
+# Init
+touch "$BANNED_IPS_FILE"
+echo -e "${BOLD}=== VPN Security Scanner v1.3.1 ===${RESET}"
+
 if [ ! -f "$LOG_FILE" ]; then
-    logger -t "${LOG_TAG}" "Error: Log file not found: $LOG_FILE. Exiting."
+    echo -e "${RED}Error: Log file not found ($LOG_FILE).${RESET}"
+    logger -t "${LOG_TAG}" "Error: Log file missing."
     exit 1
 fi
 
-# Extract unique malicious IPs from log
+# ==============================================================================
+# 1. SYNC PHASE (Persistence & Optimization)
+# ==============================================================================
+echo -n " -> Syncing persistence file... "
+
+if [ -s "$BANNED_IPS_FILE" ]; then
+    TMP_CLEAN="/tmp/vpn_clean_list.tmp"
+    : > "$TMP_CLEAN"
+    
+    while read -r SAVED_IP; do
+        [ -z "$SAVED_IP" ] && continue
+
+        # Check Global List (FirewallBlock)
+        if ipset test "$IPSET_MAIN" "$SAVED_IP" >/dev/null 2>&1; then
+            # OPTIMIZATION: IP is globally blocked. Remove from VPN set to save RAM.
+            ipset del "$IPSET_VPN" "$SAVED_IP" 2>/dev/null
+            CNT_OPTIMIZED=$((CNT_OPTIMIZED + 1))
+        else
+            # IP needs to be in VPN RAM list
+            ipset add "$IPSET_VPN" "$SAVED_IP" -exist 2>/dev/null
+            echo "$SAVED_IP" >> "$TMP_CLEAN"
+            CNT_RESTORED=$((CNT_RESTORED + 1))
+        fi
+    done < "$BANNED_IPS_FILE"
+    
+    mv "$TMP_CLEAN" "$BANNED_IPS_FILE"
+fi
+echo -e "${GREEN}Done.${RESET}"
+
+# ==============================================================================
+# 2. SCAN PHASE (Log Analysis)
+# ==============================================================================
+echo -n " -> Scanning OpenVPN logs... "
+
+# Extract unique IPs
 MALICIOUS_IPS=$(grep -i "openvpn" "$LOG_FILE" | grep -E "$SEARCH_PATTERN" | grep -oE "\b([0-9]{1,3}\.){3}[0-9]{1,3}\b" | sort -u)
 
-ip_added_count=0
-ip_skipped_count=0
+# Count lines
+NUM_FOUND=$(echo "$MALICIOUS_IPS" | grep -cE '^[0-9]')
 
-if [ -n "$MALICIOUS_IPS" ]; then
+if [ "$NUM_FOUND" -gt 0 ]; then
+    echo -e "${YELLOW}Found $NUM_FOUND suspicious IPs.${RESET}"
+    
     for IP in $MALICIOUS_IPS; do
-        
-        # 1. CHECK GLOBAL LIST (Optimization)
-        # If IP is already in the main list (FirewallBlock), we ignore it.
-        # "ipset test" also checks if IP is inside a blocked subnet (CIDR).
+        # A. Check Global List
         if ipset test "$IPSET_MAIN" "$IP" >/dev/null 2>&1; then
-            ip_skipped_count=$((ip_skipped_count + 1))
-            continue # Skip to next IP
+            CNT_SKIPPED=$((CNT_SKIPPED + 1))
+            continue
         fi
 
-        # 2. CHECK LOCAL LIST
-        # If not in global list, check if we already locally banned it.
+        # B. Check Local File (Avoid duplicates)
         if ! grep -qF "$IP" "$BANNED_IPS_FILE"; then
-            
-            # Add IP to active IPSET (Immediate block)
+            # BAN ACTION
             ipset add "$IPSET_VPN" "$IP" -exist 2>/dev/null
-            
-            # Save IP to file for reboot (Persistence)
             echo "$IP" >> "$BANNED_IPS_FILE"
             
-            logger -t "${LOG_TAG}" "BANNED: $IP (Not in main list). Added to $IPSET_VPN."
-            ip_added_count=$((ip_added_count + 1))
+            # Logs
+            echo -e "    ! ${RED}BANNED:${RESET} $IP"
+            logger -t "${LOG_TAG}" "ACTION: Banned IP $IP (OpenVPN Attack)"
+            
+            CNT_BANNED=$((CNT_BANNED + 1))
         fi
     done
+else
+    echo -e "${GREEN}Clean.${RESET}"
 fi
 
-# --- 3. UPDATE DASHBOARD COUNTER (DELTA CALCULATION) ---
-if [ "$ip_added_count" -gt 0 ]; then
-    # Read current value from file (generated by update_blocklist or previous runs)
+# ==============================================================================
+# 3. DASHBOARD UPDATE & SUMMARY
+# ==============================================================================
+if [ "$CNT_BANNED" -gt 0 ]; then
     CURRENT_DIFF=0
     if [ -f "$DIFF_FILE_VPN" ]; then
-        CURRENT_VAL=$(cat "$DIFF_FILE_VPN")
-        # Check if it is a valid number
-        case "$CURRENT_VAL" in
-            ''|*[!0-9+\-]*) CURRENT_DIFF=0 ;;
-            *) CURRENT_DIFF="$CURRENT_VAL" ;;
-        esac
+        VAL=$(cat "$DIFF_FILE_VPN"); case "$VAL" in ''|*[!0-9+\-]*) VAL=0 ;; esac
+        CURRENT_DIFF="$VAL"
     fi
-
-    # Calculate new total (Current Value + New Banned IPs)
-    NEW_DIFF=$((CURRENT_DIFF + ip_added_count))
-
-    # Format with + sign if positive
-    if [ "$NEW_DIFF" -ge 0 ]; then NEW_STR="+$NEW_DIFF"; else NEW_STR="$NEW_DIFF"; fi
-
-    # Write new value to file
-    echo "$NEW_STR" > "$DIFF_FILE_VPN"
-    
-    logger -t "${LOG_TAG}" "Dashboard VPN counter updated: $CURRENT_VAL -> $NEW_STR"
+    NEW_DIFF=$((CURRENT_DIFF + CNT_BANNED))
+    if [ "$NEW_DIFF" -ge 0 ]; then SIGN="+"; else SIGN=""; fi
+    echo "${SIGN}${NEW_DIFF}" > "$DIFF_FILE_VPN"
 fi
 
-# Log summary only if there was activity to reduce noise
-if [ "$ip_added_count" -gt 0 ] || [ "$ip_skipped_count" -gt 0 ]; then
-    logger -t "${LOG_TAG}" "Scan finished. Added: ${ip_added_count}. Skipped (Already blocked): ${ip_skipped_count}."
+# Visual Summary
+echo -e "-----------------------------------"
+echo -e " ${BOLD}Summary:${RESET}"
+echo -e "  - RAM Restored : ${GREEN}${CNT_RESTORED}${RESET}"
+echo -e "  - Optimized    : ${CYAN}${CNT_OPTIMIZED}${RESET} (Handled by Global)"
+echo -e "  - Skipped      : ${YELLOW}${CNT_SKIPPED}${RESET} (Already Blocked)"
+echo -e "  - New Bans     : ${RED}${CNT_BANNED}${RESET}"
+echo -e "-----------------------------------"
+
+# System Log Summary (Always log if there was ANY activity/detection, even if skipped)
+if [ "$CNT_OPTIMIZED" -gt 0 ] || [ "$CNT_BANNED" -gt 0 ] || [ "$CNT_SKIPPED" -gt 0 ]; then
+    logger -t "${LOG_TAG}" "Scan Finished. NewBans: $CNT_BANNED | Skipped (Global): $CNT_SKIPPED | Optimized: $CNT_OPTIMIZED"
 fi
 
 exit 0
