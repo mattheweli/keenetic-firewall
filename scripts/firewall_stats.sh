@@ -1,8 +1,10 @@
 #!/bin/sh
 
 # ==============================================================================
-# KEENETIC FIREWALL STATS v3.0.22 (ADAPTIVE DROPS LAYOUT)
+# KEENETIC FIREWALL STATS v3.0.23 (CACHE BUSTING FIX)
 # Features: 
+# - UI: Implemented Cache Busting loader for firewall_data.js.
+#       (Fixes the need for Shift+F5 to see new data).
 # - UI: 'Threat Analysis' keeps fixed 54px height for alignment consistency.
 # - UI: 'Drops History' restored to adaptive height (auto) to reduce whitespace.
 # - CORE: Forces system Timezone export for correct SQLite timing.
@@ -35,12 +37,12 @@ DIFF_FILE_V6="/opt/etc/firewall_v6_diff.dat"
 DIFF_FILE_VPN="/opt/etc/firewall_vpn_diff.dat"
 VPN_SIZE_FILE="/opt/etc/firewall_vpn_last_size.dat"
 IP_LAST_STATE="/opt/etc/firewall_ip_counters.dat"
-ABUSEIPDB_KEY="<PUT YOUR KEY HERE>"
+ABUSEIPDB_KEY=""
 
 mkdir -p "$WEB_DIR"
 DATE_CMD="/opt/bin/date"; [ ! -x "$DATE_CMD" ] && DATE_CMD="date"
 
-echo "=== Firewall Stats Updater v3.0.22 ==="
+echo "=== Firewall Stats Updater v3.0.23 ==="
 
 # 1. DB INIT
 if [ ! -f "$DB_FILE" ]; then
@@ -405,7 +407,6 @@ cat <<'HTML_EOF' > "$HTML_FILE"
 
     <div class="footer">Uptime: <span id="uptime">-</span></div>
     
-    <script src="firewall_data.js"></script>
     <script>
         function showMainTab(id) {
             document.querySelectorAll('.view-section').forEach(e => e.classList.remove('active'));
@@ -419,35 +420,44 @@ cat <<'HTML_EOF' > "$HTML_FILE"
             document.getElementById('tab_'+id).classList.add('active'); 
             event.target.classList.add('active'); 
         }
-        if (typeof window.FW_DATA !== 'undefined') {
-            const d = window.FW_DATA;
-            const setDiff = (elId, val) => { const el = document.getElementById(elId); if(!val || val==='0' || val==='=0' || val==='+0' || val==='-0'){ el.innerHTML=`<span class="diff eq">-</span>`; } else if(val.includes('+')){ el.innerHTML=`<span class="diff pos">${val}</span>`; } else if(val.includes('-')){ el.innerHTML=`<span class="diff neg">${val}</span>`; } else { el.innerHTML=`<span class="diff eq">-</span>`; } };
-            document.getElementById('size_main').innerText = d.lists.main; setDiff('diff_v4', d.lists.diff_v4);
-            document.getElementById('size_main6').innerText = d.lists.main6; setDiff('diff_v6', d.lists.diff_v6);
-            document.getElementById('size_vpn').innerText = d.lists.vpn; setDiff('diff_vpn', d.lists.diff_vpn);
-            document.getElementById('lifetime').innerText = d.lifetime; 
-            document.getElementById('uptime').innerText = d.uptime; 
-            document.getElementById('last_update_header').innerText = d.updated;
-            
-            // History Tables
-            document.getElementById('tb_top_days').innerHTML = d.tables.top_days;
-            document.getElementById('tb_hourly').innerHTML = d.tables.hourly; document.getElementById('tb_daily').innerHTML = d.tables.daily;
-            document.getElementById('tb_monthly').innerHTML = d.tables.monthly; document.getElementById('tb_yearly').innerHTML = d.tables.yearly;
-            
-            // Averages
-            if(d.averages) {
-                document.getElementById('avg_hourly').innerText = "Avg: " + d.averages.hourly;
-                document.getElementById('avg_daily').innerText = "Avg: " + d.averages.daily;
-                document.getElementById('avg_monthly').innerText = "Avg: " + d.averages.monthly;
-                document.getElementById('avg_yearly').innerText = "Avg: " + d.averages.yearly;
-            }
 
-            // Dual Tables (IPs & Subnets)
-            ['24h','30d','1y','all'].forEach(p => {
-                document.getElementById('tb_ips_'+p).innerHTML = d.tables['ips_'+p];
-                document.getElementById('tb_nets_'+p).innerHTML = d.tables['nets_'+p];
-            });
+        function initDashboard() {
+            if (typeof window.FW_DATA !== 'undefined') {
+                const d = window.FW_DATA;
+                const setDiff = (elId, val) => { const el = document.getElementById(elId); if(!val || val==='0' || val==='=0' || val==='+0' || val==='-0'){ el.innerHTML=`<span class="diff eq">-</span>`; } else if(val.includes('+')){ el.innerHTML=`<span class="diff pos">${val}</span>`; } else if(val.includes('-')){ el.innerHTML=`<span class="diff neg">${val}</span>`; } else { el.innerHTML=`<span class="diff eq">-</span>`; } };
+                document.getElementById('size_main').innerText = d.lists.main; setDiff('diff_v4', d.lists.diff_v4);
+                document.getElementById('size_main6').innerText = d.lists.main6; setDiff('diff_v6', d.lists.diff_v6);
+                document.getElementById('size_vpn').innerText = d.lists.vpn; setDiff('diff_vpn', d.lists.diff_vpn);
+                document.getElementById('lifetime').innerText = d.lifetime; 
+                document.getElementById('uptime').innerText = d.uptime; 
+                document.getElementById('last_update_header').innerText = d.updated;
+                
+                // History Tables
+                document.getElementById('tb_top_days').innerHTML = d.tables.top_days;
+                document.getElementById('tb_hourly').innerHTML = d.tables.hourly; document.getElementById('tb_daily').innerHTML = d.tables.daily;
+                document.getElementById('tb_monthly').innerHTML = d.tables.monthly; document.getElementById('tb_yearly').innerHTML = d.tables.yearly;
+                
+                // Averages
+                if(d.averages) {
+                    document.getElementById('avg_hourly').innerText = "Avg: " + d.averages.hourly;
+                    document.getElementById('avg_daily').innerText = "Avg: " + d.averages.daily;
+                    document.getElementById('avg_monthly').innerText = "Avg: " + d.averages.monthly;
+                    document.getElementById('avg_yearly').innerText = "Avg: " + d.averages.yearly;
+                }
+
+                // Dual Tables (IPs & Subnets)
+                ['24h','30d','1y','all'].forEach(p => {
+                    document.getElementById('tb_ips_'+p).innerHTML = d.tables['ips_'+p];
+                    document.getElementById('tb_nets_'+p).innerHTML = d.tables['nets_'+p];
+                });
+            }
         }
+
+        // --- CACHE BUSTING LOADER ---
+        var s = document.createElement("script");
+        s.src = "firewall_data.js?v=" + Date.now(); // Adds timestamp to URL
+        s.onload = function() { initDashboard(); };
+        document.head.appendChild(s);
     </script>
 </body>
 </html>
