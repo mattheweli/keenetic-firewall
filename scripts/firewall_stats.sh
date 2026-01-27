@@ -1,11 +1,11 @@
 #!/bin/sh
 
 # ==============================================================================
-# KEENETIC FIREWALL STATS v3.0.19 (TIMEZONE FIX)
+# KEENETIC FIREWALL STATS v3.0.22 (ADAPTIVE DROPS LAYOUT)
 # Features: 
-# - FIX: Forces system Timezone export so SQLite respects local time (e.g. 18:00 vs 17:00).
-# - FIX: SQL 'ORDER BY' uses MAX(timestamp) to ensure correct sorting of grouped rows.
-# - UI: Console feedback with SQLite time verification.
+# - UI: 'Threat Analysis' keeps fixed 54px height for alignment consistency.
+# - UI: 'Drops History' restored to adaptive height (auto) to reduce whitespace.
+# - CORE: Forces system Timezone export for correct SQLite timing.
 # ==============================================================================
 
 export PATH=/opt/bin:/opt/sbin:/usr/bin:/usr/sbin:/bin:/sbin
@@ -40,7 +40,7 @@ ABUSEIPDB_KEY="<PUT YOUR KEY HERE>"
 mkdir -p "$WEB_DIR"
 DATE_CMD="/opt/bin/date"; [ ! -x "$DATE_CMD" ] && DATE_CMD="date"
 
-echo "=== Firewall Stats Updater v3.0.19 ==="
+echo "=== Firewall Stats Updater v3.0.22 ==="
 
 # 1. DB INIT
 if [ ! -f "$DB_FILE" ]; then
@@ -300,7 +300,30 @@ cat <<'HTML_EOF' > "$HTML_FILE"
         .table-container { background: var(--card); border-radius: 10px; box-shadow: 0 2px 10px var(--shadow); border: 1px solid var(--border); overflow-x: auto; -webkit-overflow-scrolling: touch; }
         table { width: 100%; border-collapse: collapse; white-space: nowrap; }
         th { background: var(--th-bg); padding: 10px 12px; text-align: left; font-size: 11px; text-transform: uppercase; color: var(--muted); font-weight: 700; border-bottom: 1px solid var(--border); }
-        td { padding: 10px 12px; border-bottom: 1px solid var(--border); font-size: 13px; color: var(--text); }
+        
+        td { padding: 8px 12px; border-bottom: 1px solid var(--border); font-size: 13px; color: var(--text); vertical-align: middle; }
+        
+        /* Threat Analysis (Rows with Domain Info) - Needs Fixed Height */
+        #view_sources tbody tr { height: 54px; }
+        
+        /* Drops History - Auto Height (Adaptive) */
+        #view_history tbody tr { height: auto; }
+        
+        /* TRUNCATE LONG TEXT INFO */
+        .meta { font-size: 13px; color: var(--muted); line-height: 1.3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 240px; }
+        
+        /* DOMAIN ROW (RESERVES SPACE IF EMPTY) */
+        .meta small { 
+            display: block; 
+            font-size: 11px; 
+            font-weight: 500; 
+            min-height: 15px; /* Reserves space for 2nd line */
+            overflow: hidden; 
+            text-overflow: ellipsis; 
+            white-space: nowrap;
+            margin-top: 2px;
+        }
+
         .num { text-align: right; font-family: monospace; font-weight: 600; }
         .col-main { color: var(--red); } .col-v6 { color: var(--purple); } .col-vpn { color: var(--orange); }
         .nodata { text-align: center; color: var(--muted); padding: 15px; font-style: italic; }
@@ -315,7 +338,6 @@ cat <<'HTML_EOF' > "$HTML_FILE"
         
         .badge { font-size: 10px; padding: 2px 6px; border-radius: 4px; color: #fff; font-weight: 700; }
         .bg-danger { background: var(--red); } .bg-primary { background: var(--blue); } .bg-secondary { background: var(--gray); }
-        .meta { font-size: 13px; color: var(--muted); line-height: 1.4; white-space: normal; }
         .meta small { font-size: 12px; font-weight: 500; }
         a { color: var(--blue); text-decoration: none; } a:hover { text-decoration: underline; }
         .footer { text-align: center; font-size: 11px; color: var(--muted); margin-top: 40px; }
