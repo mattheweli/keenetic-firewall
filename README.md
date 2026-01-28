@@ -1,3 +1,14 @@
+<div align="center">
+
+### ❤️ Support the Project
+If you found this project helpful, consider buying me a coffee!
+
+<a href="https://revolut.me/matthew_eli">
+  <img src="https://img.shields.io/badge/Revolut-black?style=for-the-badge&logo=revolut&logoColor=white" alt="Donate with Revolut" />
+</a>
+
+</div>
+
 # Keenetic Firewall 🛡️📊
 
 High-performance firewall and monitoring suite for Keenetic routers (Entware/NDM). This suite integrates massive IPSET blocklists, provides real-time traffic analysis, VPN protection, and a rich HTML dashboard with historical data and threat intelligence.
