@@ -3,9 +3,15 @@
 ### ❤️ Support the Project
 If you found this project helpful, consider buying me a coffee!
 
+<a href="https://paypal.me/MatteoRosettani">
+  <img src="https://img.shields.io/badge/PayPal-00457C?style=for-the-badge&logo=paypal&logoColor=white" alt="Donate with PayPal" />
+</a>
+
 <a href="https://revolut.me/matthew_eli">
   <img src="https://img.shields.io/badge/Revolut-black?style=for-the-badge&logo=revolut&logoColor=white" alt="Donate with Revolut" />
 </a>
+
+</div>
 
 </div>
 
