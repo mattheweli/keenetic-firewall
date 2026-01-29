@@ -13,9 +13,7 @@ If you found this project helpful, consider buying me a coffee!
 
 </div>
 
-</div>
-
-# Keenetic Firewall 🛡️📊
+# Keenetic Firewall 🛡️
 
 High-performance firewall and monitoring suite for Keenetic routers (Entware/NDM). This suite integrates massive IPSET blocklists, provides real-time traffic analysis, VPN protection, and a rich HTML dashboard with historical data and threat intelligence.
 
@@ -46,17 +44,37 @@ High-performance firewall and monitoring suite for Keenetic routers (Entware/NDM
 
 ```bash
 opkg update
-opkg install ipset iptables bash wget curl \
+opkg install ipset iptables bash wget-ssl curl \
              sqlite3-cli coreutils-date mtr \
              grep awk sed
 ```
-**Note**: coreutils-date is crucial for accurate timestamp calculations in the database scripts.
+**Note**: `coreutils-date` is crucial for accurate timestamp calculations in the database scripts.
 
 ---
 
 ## 🛠️ Installation
 
-### 1. Core Firewall (The Engine)
+You can install the suite automatically using **Keentool** (recommended) or manually.
+
+### Option 1: Automatic Installation (Recommended) ⚡
+Use **Keentool**, the all-in-one manager, to install, update, and configure the Firewall Suite and its dependencies automatically.
+
+1.  Run the following command in your SSH terminal:
+    ```bash
+    curl -sL https://raw.githubusercontent.com/mattheweli/keentool/main/keentool -o /opt/bin/keentool && chmod +x /opt/bin/keentool && /opt/bin/keentool
+    ```
+2.  Select **3. Firewall Suite** from the menu.
+3.  Choose **1. Install / Update**.
+    * The tool will automatically download scripts, set permissions, and configure Crontab.
+    * It will also guide you through setting up the **AbuseIPDB Key**.
+
+---
+
+### Option 2: Manual Installation 🔧
+
+If you prefer to configure everything yourself, follow these steps:
+
+#### 1. Core Firewall (The Engine)
 Handles the blocking logic and boot loading.
 
 1.  **Boot Loader:** Copy `scripts/S00ipset-load` to `/opt/etc/init.d/S00ipset-load`.
@@ -67,7 +85,7 @@ Handles the blocking logic and boot loading.
     chmod +x /opt/etc/ndm/netfilter.d/100-firewall.sh
     ```
 
-### 2. Updater & VPN Scanner
+#### 2. Updater & VPN Scanner
 Keeps lists fresh and bans VPN attackers.
 
 1.  Copy `scripts/update_blocklist.sh` to `/opt/bin/update_blocklist.sh`.
@@ -77,7 +95,8 @@ Keeps lists fresh and bans VPN attackers.
     chmod +x /opt/bin/update_blocklist.sh
     chmod +x /opt/bin/vpn_scan.sh
     ```
-### 3. Statistics & Dashboard
+
+#### 3. Statistics & Dashboard
 Generates the HTML dashboard.
 
 1.  Copy `scripts/firewall_stats.sh` to `/opt/bin/firewall_stats.sh`.
@@ -90,7 +109,7 @@ Generates the HTML dashboard.
     chmod +x /opt/bin/firewall_stats.sh
     ```
 
-### 4. Terminal Live Monitor (Optional)
+#### 4. Terminal Live Monitor (Optional)
 Real-time stats in your SSH terminal.
 
 1.  Copy `scripts/firewall_monitor` to `/opt/bin/firewall_monitor` (no extension).
@@ -99,10 +118,7 @@ Real-time stats in your SSH terminal.
     chmod +x /opt/bin/firewall_monitor
     ```
 
----
-
-## ⏰ Automation (Crontab)
-
+#### 5. Automation (Crontab)
 To make everything work automatically, add these lines to your crontab (`/opt/etc/crontab`):
 
 ```bash
@@ -114,6 +130,7 @@ To make everything work automatically, add these lines to your crontab (`/opt/et
 
 # 🕵️ VPN: Scan for attackers (Every 3 hours)
 0 */3 * * * root /opt/bin/vpn_scan.sh > /dev/null 2>&1
+```
 
 ---
 
@@ -129,6 +146,12 @@ Simply run from your SSH terminal:
 firewall_monitor
 ```
 Shows real-time drops, session statistics, and the top 5 active blocked sources.
+
+### Using Keentool
+Run the manager at any time to check for updates or manage settings:
+```bash
+keentool
+```
 
 ---
 
