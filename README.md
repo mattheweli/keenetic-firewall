@@ -17,6 +17,8 @@ If you found this project helpful, consider buying me a coffee!
 
 High-performance firewall and monitoring suite for Keenetic routers (Entware/NDM). This suite integrates massive IPSET blocklists, provides real-time traffic analysis, VPN protection, and a rich HTML dashboard with historical data and threat intelligence.
 
+![alt text](https://github.com/mattheweli/keenetic-firewall/blob/main/image.png.e62a0170fd1bc45ffd52f55f3679dd7f.png)
+
 ## 🚀 Features
 
 ### 🔥 Core Firewall
