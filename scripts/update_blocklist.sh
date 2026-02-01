@@ -33,7 +33,7 @@ MAX_ELEM_V4=524288
 MAX_ELEM_V6=65536
 
 # API Key
-ABUSEIPDB_KEY="14fc4f79c96b002d121bac85ff8b8b280aff566563acb46f07fcd4d63d2eb666a1baa2323d9fb778" 
+ABUSEIPDB_KEY="" 
 ABUSE_CACHE="/opt/etc/abuseipdb_v6.cache"
 CACHE_DURATION=21600
 
@@ -233,3 +233,4 @@ echo "================================================"
 
 # Write one-line summary to Syslog
 logger -t "$LOG_TAG" "SUMMARY | IPv4: $RES_V4 ($CHG_V4) | IPv6: $RES_V6 ($CHG_V6) | VPN-Opt: -$CHG_VPN"
+
