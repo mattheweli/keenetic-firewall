@@ -1,69 +1,77 @@
 #!/bin/sh
 
 # ==============================================================================
-# KEENETIC FIREWALL STATS v3.0.23 (CACHE BUSTING FIX)
+# KEENTOOL FIREWALL STATS v3.2.3 (LIFETIME GLOBAL)
 # Features: 
-# - UI: Implemented Cache Busting loader for firewall_data.js.
-#       (Fixes the need for Shift+F5 to see new data).
-# - UI: 'Threat Analysis' keeps fixed 54px height for alignment consistency.
-# - UI: 'Drops History' restored to adaptive height (auto) to reduce whitespace.
-# - CORE: Forces system Timezone export for correct SQLite timing.
+# - RETENTION: IP Details kept 30 days. Global Stats kept FOREVER (Lifetime).
+# - SHERLOCK: Uses tcpdump to identify target ports for Top 10 active threats.
+# - CONFIG: Reads /opt/etc/firewall.conf to enable/disable IPv6 processing.
 # ==============================================================================
 
 export PATH=/opt/bin:/opt/sbin:/usr/bin:/usr/sbin:/bin:/sbin
 
 # --- FORCE TIMEZONE ---
-# Entware/SQLite needs TZ variable to perform localtime conversion correctly
-if [ -f /etc/TZ ]; then
-    export TZ=$(cat /etc/TZ)
-elif [ -f /opt/etc/TZ ]; then
-    export TZ=$(cat /opt/etc/TZ)
-fi
+if [ -f /etc/TZ ]; then export TZ=$(cat /etc/TZ); elif [ -f /opt/etc/TZ ]; then export TZ=$(cat /opt/etc/TZ); fi
 
 # --- CONFIGURATION ---
+CONF_FILE="/opt/etc/firewall.conf"
+if [ -f "$CONF_FILE" ]; then . "$CONF_FILE"; else ENABLE_IPV6="true"; fi
+
 DB_FILE="/opt/etc/firewall_stats.db"
 WEB_DIR="/opt/var/www/firewall"
 DATA_FILE="$WEB_DIR/firewall_data.js"
 HTML_FILE="$WEB_DIR/index.html"
+LOG_TAG="Firewall_Stats"
 
 # Tools
 IPTABLES_CMD="iptables"
 IP6TABLES_CMD="ip6tables"
 
-TARGETS="FirewallBlock|$IPTABLES_CMD| FirewallBlock6|$IP6TABLES_CMD|6 VPNBlock|$IPTABLES_CMD|"
+# Define Targets based on Config
+if [ "$ENABLE_IPV6" = "true" ]; then
+    TARGETS="FirewallBlock|$IPTABLES_CMD| FirewallBlock6|$IP6TABLES_CMD|6 VPNBlock|$IPTABLES_CMD|"
+else
+    TARGETS="FirewallBlock|$IPTABLES_CMD| VPNBlock|$IPTABLES_CMD|"
+fi
 
 DIFF_FILE_V4="/opt/etc/firewall_v4_diff.dat"
 DIFF_FILE_V6="/opt/etc/firewall_v6_diff.dat"
 DIFF_FILE_VPN="/opt/etc/firewall_vpn_diff.dat"
 VPN_SIZE_FILE="/opt/etc/firewall_vpn_last_size.dat"
 IP_LAST_STATE="/opt/etc/firewall_ip_counters.dat"
-ABUSEIPDB_KEY=""
+ABUSEIPDB_KEY=$(grep 'ABUSEIPDB_KEY=' /opt/bin/update_blocklist.sh 2>/dev/null | cut -d'"' -f2) 
 
 mkdir -p "$WEB_DIR"
 DATE_CMD="/opt/bin/date"; [ ! -x "$DATE_CMD" ] && DATE_CMD="date"
 
-echo "=== Firewall Stats Updater v3.0.23 ==="
+# Stats Accumulators
+NEW_DROPS_V4=0; NEW_DROPS_V6=0; NEW_DROPS_VPN=0
+NEW_IP_RECORDS=0
 
-# 1. DB INIT
+echo "=== Firewall Stats Updater v3.2.3 ==="
+echo " -> Mode: IPv6=$ENABLE_IPV6"
+
+# 1. DB INIT & UPGRADE
 if [ ! -f "$DB_FILE" ]; then
     echo " -> Initializing new Database..."
     sqlite3 "$DB_FILE" "CREATE TABLE drops (id INTEGER PRIMARY KEY, timestamp INTEGER, list_name TEXT, count INTEGER); CREATE INDEX idx_ts ON drops(timestamp);"
     sqlite3 "$DB_FILE" "CREATE TABLE ip_drops (timestamp INTEGER, ip TEXT, count INTEGER); CREATE INDEX idx_ip_ts ON ip_drops(timestamp);"
-    sqlite3 "$DB_FILE" "CREATE TABLE ip_info (ip TEXT PRIMARY KEY, country TEXT, risk INTEGER, domain TEXT, updated INTEGER);"
+    sqlite3 "$DB_FILE" "CREATE TABLE ip_info (ip TEXT PRIMARY KEY, country TEXT, risk INTEGER, domain TEXT, updated INTEGER, target_port INTEGER);"
+else
+    # Check for Schema Upgrade (Add target_port if missing)
+    if ! sqlite3 "$DB_FILE" "PRAGMA table_info(ip_info);" | grep -q "target_port"; then
+        echo " -> Upgrading DB Schema (Adding target_port)..."
+        sqlite3 "$DB_FILE" "ALTER TABLE ip_info ADD COLUMN target_port INTEGER;"
+    fi
 fi
 
 NOW=$($DATE_CMD +%s)
 
-# DEBUG TIMEZONE
-SQL_TIME=$(sqlite3 "$DB_FILE" "SELECT time($NOW, 'unixepoch', 'localtime');")
-SYS_TIME=$($DATE_CMD "+%H:%M:%S")
-echo " -> Time Check | System: $SYS_TIME | SQLite: $SQL_TIME"
-if [ "$SQL_TIME" != "$SYS_TIME" ]; then
-    echo "    WARNING: SQLite time mismatch! Rows might appear in UTC."
-fi
-
 # 2. COLLECT TOTALS
 echo " -> Reading counters..."
+# Pre-init size vars to 0
+SIZE_FirewallBlock=0; SIZE_FirewallBlock6=0; SIZE_VPNBlock=0
+
 for TARGET in $TARGETS; do
     SET_NAME=$(echo "$TARGET" | cut -d'|' -f1)
     CMD=$(echo "$TARGET" | cut -d'|' -f2)
@@ -74,7 +82,6 @@ for TARGET in $TARGETS; do
     C_IN_RAW=$($CMD -L "BLOCKLIST_IN${SUFFIX}" -v -x -n 2>/dev/null | grep -w "match-set $SET_NAME" | awk '{print $1}' | head -n 1)
     C_FW_RAW=$($CMD -L "BLOCKLIST_FWD${SUFFIX}" -v -x -n 2>/dev/null | grep -w "match-set $SET_NAME" | awk '{print $1}' | head -n 1)
     
-    # Sanitize inputs
     C_IN=$C_IN_RAW; case "$C_IN" in ''|*[!0-9]*) C_IN=0 ;; esac
     C_FW=$C_FW_RAW; case "$C_FW" in ''|*[!0-9]*) C_FW=0 ;; esac
     CUR=$((C_IN + C_FW))
@@ -88,6 +95,11 @@ for TARGET in $TARGETS; do
 
     if [ "$DELTA" -gt 0 ]; then
         sqlite3 "$DB_FILE" "INSERT INTO drops (timestamp, list_name, count) VALUES ($NOW, '$SET_NAME', $DELTA);"
+        
+        # Accumulate Stats for Report
+        if [ "$SET_NAME" = "FirewallBlock" ]; then NEW_DROPS_V4=$DELTA; fi
+        if [ "$SET_NAME" = "FirewallBlock6" ]; then NEW_DROPS_V6=$DELTA; fi
+        if [ "$SET_NAME" = "VPNBlock" ]; then NEW_DROPS_VPN=$DELTA; fi
     fi
     echo "$CUR" > "$LAST_RUN_FILE"
     
@@ -100,15 +112,11 @@ done
 # --- DIFF MANAGEMENT ---
 read_file() { if [ -f "$1" ]; then cat "$1" | tr -d '\n'; else echo "=0"; fi; }
 
-# 1. Main Lists
 DIFF_V4=$(read_file "$DIFF_FILE_V4")
-DIFF_V6=$(read_file "$DIFF_FILE_V6")
+if [ "$ENABLE_IPV6" = "true" ]; then DIFF_V6=$(read_file "$DIFF_FILE_V6"); else DIFF_V6="=0"; fi
 
-# 2. VPN List
 S_VPN_CUR=$SIZE_VPNBlock
-case "$S_VPN_CUR" in ''|*[!0-9]*) S_VPN_CUR=0 ;; esac
-S_VPN_LAST=$(read_file "$VPN_SIZE_FILE")
-case "$S_VPN_LAST" in ''|*[!0-9]*) S_VPN_LAST=$S_VPN_CUR ;; esac
+S_VPN_LAST=$(read_file "$VPN_SIZE_FILE"); case "$S_VPN_LAST" in ''|*[!0-9]*) S_VPN_LAST=$S_VPN_CUR ;; esac
 
 if [ "$S_VPN_CUR" -ne "$S_VPN_LAST" ]; then
     D_VPN=$((S_VPN_CUR - S_VPN_LAST))
@@ -128,7 +136,9 @@ SQL_IMPORT="/tmp/ip_inserts.sql"
 
 {
     ipset list FirewallBlock 2>/dev/null | grep "packets" | sed -n 's/^\([^ ]*\) .*packets \([0-9]*\) .*/\1 \2/p' | awk '$2 > 0'
-    ipset list FirewallBlock6 2>/dev/null | grep "packets" | sed -n 's/^\([^ ]*\) .*packets \([0-9]*\) .*/\1 \2/p' | awk '$2 > 0'
+    if [ "$ENABLE_IPV6" = "true" ]; then
+        ipset list FirewallBlock6 2>/dev/null | grep "packets" | sed -n 's/^\([^ ]*\) .*packets \([0-9]*\) .*/\1 \2/p' | awk '$2 > 0'
+    fi
 } | sort > "$CURRENT_DUMP"
 
 DB_IS_EMPTY=$(sqlite3 "$DB_FILE" "SELECT count(*) FROM ip_drops;")
@@ -142,8 +152,8 @@ fi
 cp "$CURRENT_DUMP" "$IP_LAST_STATE"
 
 if [ -s "$SQL_IMPORT" ]; then
-    LINES=$(wc -l < "$SQL_IMPORT")
-    echo "    Importing $LINES new IP records..."
+    NEW_IP_RECORDS=$(wc -l < "$SQL_IMPORT")
+    echo "    Importing $NEW_IP_RECORDS new IP records..."
     echo "BEGIN TRANSACTION;" > /tmp/ip_trans.sql; cat "$SQL_IMPORT" >> /tmp/ip_trans.sql; echo "COMMIT;" >> /tmp/ip_trans.sql
     sqlite3 "$DB_FILE" < /tmp/ip_trans.sql; rm /tmp/ip_trans.sql
 fi
@@ -159,7 +169,7 @@ gen_html_rows() {
     sqlite3 -separator "|" "$DB_FILE" "$QUERY" | awk -F'|' '{print "<tr><td>"$1"</td><td class=\"num col-main\">+"$2"</td><td class=\"num col-v6\">+"$3"</td><td class=\"num col-vpn\">+"$4"</td><td class=\"num\">+"$5"</td></tr>"}'
 }
 
-# Robust get_avg using awk
+# Robust get_avg
 get_avg() {
     QUERY="SELECT AVG(total) FROM (SELECT SUM(count) as total FROM drops $2 GROUP BY $1);"
     RES=$(sqlite3 "$DB_FILE" "$QUERY")
@@ -186,8 +196,7 @@ ROWS_TOP_DAYS=$(gen_top_days)
 
 get_top10() {
     PERIOD_SEC=$1; TYPE=$2
-    if [ "$TYPE" = "NET" ]; then FILTER="AND ip LIKE '%/%'"; BADGE="bg-secondary"; else FILTER="AND ip NOT LIKE '%/%'"; BADGE="bg-primary"; fi
-    
+    if [ "$TYPE" = "NET" ]; then FILTER="AND ip LIKE '%/%'"; else FILTER="AND ip NOT LIKE '%/%'"; fi
     if [ "$PERIOD_SEC" -eq 0 ]; then QUERY="SELECT ip, sum(count) as total FROM ip_drops WHERE 1=1 $FILTER GROUP BY ip ORDER BY total DESC LIMIT 10;"
     else LIMIT_TS=$((NOW - PERIOD_SEC)); QUERY="SELECT ip, sum(count) as total FROM ip_drops WHERE timestamp > $LIMIT_TS $FILTER GROUP BY ip ORDER BY total DESC LIMIT 10;"; fi
     
@@ -202,8 +211,10 @@ get_top10() {
         
         CACHE=$(sqlite3 -separator "|" "$DB_FILE" "SELECT country, risk, domain FROM ip_info WHERE ip='$CLEAN_IP';")
         if [ -z "$CACHE" ]; then
-            J=$(curl -s -m 3 -G https://api.abuseipdb.com/api/v2/check --data-urlencode "ipAddress=$CLEAN_IP" -d maxAgeInDays=90 -H "Key: $ABUSEIPDB_KEY" -H "Accept: application/json" || echo "")
-            CO=$(echo "$J"|grep -o '"countryCode":"[^"]*"'|cut -d'"' -f4); SC=$(echo "$J"|grep -o '"abuseConfidenceScore":[0-9]*'|cut -d':' -f2); DO=$(echo "$J"|grep -o '"domain":"[^"]*"'|cut -d'"' -f4)
+            if [ -n "$ABUSEIPDB_KEY" ]; then
+                J=$(curl -s -m 3 -G https://api.abuseipdb.com/api/v2/check --data-urlencode "ipAddress=$CLEAN_IP" -d maxAgeInDays=90 -H "Key: $ABUSEIPDB_KEY" -H "Accept: application/json" || echo "")
+                CO=$(echo "$J"|grep -o '"countryCode":"[^"]*"'|cut -d'"' -f4); SC=$(echo "$J"|grep -o '"abuseConfidenceScore":[0-9]*'|cut -d':' -f2); DO=$(echo "$J"|grep -o '"domain":"[^"]*"'|cut -d'"' -f4)
+            fi
             case "$SC" in ''|*[!0-9]*) SC=0 ;; esac
             if [ -n "$CO" ]; then sqlite3 "$DB_FILE" "INSERT OR REPLACE INTO ip_info (ip, country, risk, domain, updated) VALUES ('$CLEAN_IP', '$CO', $SC, '$DO', $NOW);"; CACHE="$CO|$SC|$DO"; fi
         fi
@@ -219,9 +230,29 @@ TB_IPS_30D=$(get_top10 2592000 "IP"); TB_NETS_30D=$(get_top10 2592000 "NET")
 TB_IPS_1Y=$(get_top10 31536000 "IP"); TB_NETS_1Y=$(get_top10 31536000 "NET")
 TB_IPS_ALL=$(get_top10 0 "IP"); TB_NETS_ALL=$(get_top10 0 "NET")
 
-# --- CLEANUP ---
-sqlite3 "$DB_FILE" "DELETE FROM drops WHERE timestamp < $((NOW - 31536000));"
-sqlite3 "$DB_FILE" "DELETE FROM ip_drops WHERE timestamp < $((NOW - 31536000));"
+# --- CLEANUP (LIFETIME GLOBAL / 30 DAYS IPS) ---
+echo " -> Performing Database Cleanup..."
+
+# Settings
+RETENTION_IPS=2592000      # 30 Days (for heavy IP logs & details)
+# Note: Global Drops are now KEPT FOREVER (Lifetime Stats)
+
+LIMIT_IPS=$((NOW - RETENTION_IPS))
+
+# 1. Clean Detailed IP Logs (Keep 30 Days)
+sqlite3 "$DB_FILE" "DELETE FROM ip_drops WHERE timestamp < $LIMIT_IPS;"
+
+# 2. Clean Orphan IP Info (Not seen in 30 days)
+sqlite3 "$DB_FILE" "DELETE FROM ip_info WHERE updated < $LIMIT_IPS;"
+
+# 3. Clean Abuse Reports History (Keep 30 days)
+if sqlite3 "$DB_FILE" "SELECT name FROM sqlite_master WHERE type='table' AND name='reported_ips';" | grep -q "reported_ips"; then
+    sqlite3 "$DB_FILE" "DELETE FROM reported_ips WHERE last_report < $LIMIT_IPS;"
+fi
+
+# 4. Optimize DB Size (Reclaim Disk Space)
+# This is crucial after large deletions to shrink the .db file
+sqlite3 "$DB_FILE" "VACUUM;"
 
 # --- JSON EXPORT ---
 DATE_UPDATE=$($DATE_CMD "+%d-%m-%Y %H:%M:%S"); UP_SECONDS=$(cut -d. -f1 /proc/uptime)
@@ -229,11 +260,12 @@ case "$UP_SECONDS" in ''|*[!0-9]*) UP_SECONDS=0 ;; esac
 DAYS=$((UP_SECONDS / 86400)); HOURS=$(( (UP_SECONDS % 86400) / 3600 ))
 UPTIME="${DAYS}d ${HOURS}h"
 
-S_MAIN=$SIZE_FirewallBlock; S_MAIN6=$SIZE_FirewallBlock6; S_VPN=$SIZE_VPNBlock
+S_MAIN=${SIZE_FirewallBlock:-0}; S_MAIN6=${SIZE_FirewallBlock6:-0}; S_VPN=${SIZE_VPNBlock:-0}
 
 cat <<EOF > "$DATA_FILE"
 window.FW_DATA = {
     updated: "$DATE_UPDATE", uptime: "$UPTIME", lifetime: "$TOTAL_DROPS_ALL_TIME",
+    ipv6_status: "$ENABLE_IPV6",
     lists: { 
         main: "$S_MAIN", diff_v4: "$DIFF_V4", 
         main6: "$S_MAIN6", diff_v6: "$DIFF_V6", 
@@ -327,7 +359,7 @@ cat <<'HTML_EOF' > "$HTML_FILE"
         }
 
         .num { text-align: right; font-family: monospace; font-weight: 600; }
-        .col-main { color: var(--red); } .col-v6 { color: var(--purple); } .col-vpn { color: var(--orange); }
+        .col-main { color: var(--red); } td.col-v6 { color: var(--purple); } .col-vpn { color: var(--orange); }
         .nodata { text-align: center; color: var(--muted); padding: 15px; font-style: italic; }
         
         .avg-badge { font-size: 13px; font-weight: 600; color: #0d6efd; background: rgba(13, 110, 253, 0.08); padding: 2px 10px; border-radius: 20px; margin-left: 12px; }
@@ -365,7 +397,7 @@ cat <<'HTML_EOF' > "$HTML_FILE"
 
     <div class="grid-cards">
         <div class="card"><h3>IPv4 Blocklist (IP/Subnet)</h3><div><span class="val" style="color:var(--red)" id="size_main">-</span><span id="diff_v4"></span></div></div>
-        <div class="card"><h3>IPv6 Blocklist (IP/Subnet)</h3><div><span class="val" style="color:var(--purple)" id="size_main6">-</span><span id="diff_v6"></span></div></div>
+        <div class="card" id="card_v6"><h3>IPv6 Blocklist (IP/Subnet)</h3><div><span class="val" style="color:var(--purple)" id="size_main6">-</span><span id="diff_v6"></span></div></div>
         <div class="card"><h3>VPN Blocklist (IP)</h3><div><span class="val" style="color:var(--orange)" id="size_vpn">-</span><span id="diff_vpn"></span></div></div>
         <div class="card"><h3>Total Drops (Lifetime)</h3><div class="val" style="color:var(--blue)" id="lifetime">-</div></div>
     </div>
@@ -393,15 +425,15 @@ cat <<'HTML_EOF' > "$HTML_FILE"
 
     <div id="view_history" class="view-section">
         <div class="tables-grid">
-            <div><div class="section-title"><span>Hourly (Last 24h)<span class="avg-badge" id="avg_hourly"></span></span></div><div class="table-container"><table><thead><tr><th>Hour</th><th class="num">IPv4</th><th class="num">IPv6</th><th class="num">VPN</th><th class="num">Tot</th></tr></thead><tbody id="tb_hourly"></tbody></table></div></div>
-            <div><div class="section-title"><span>Daily (Last 30 Days)<span class="avg-badge" id="avg_daily"></span></span></div><div class="table-container"><table><thead><tr><th>Date</th><th class="num">IPv4</th><th class="num">IPv6</th><th class="num">VPN</th><th class="num">Tot</th></tr></thead><tbody id="tb_daily"></tbody></table></div></div>
+            <div><div class="section-title"><span>Hourly (Last 24h)<span class="avg-badge" id="avg_hourly"></span></span></div><div class="table-container"><table><thead><tr><th>Hour</th><th class="num">IPv4</th><th class="num col-v6">IPv6</th><th class="num">VPN</th><th class="num">Tot</th></tr></thead><tbody id="tb_hourly"></tbody></table></div></div>
+            <div><div class="section-title"><span>Daily (Last 30 Days)<span class="avg-badge" id="avg_daily"></span></span></div><div class="table-container"><table><thead><tr><th>Date</th><th class="num">IPv4</th><th class="num col-v6">IPv6</th><th class="num">VPN</th><th class="num">Tot</th></tr></thead><tbody id="tb_daily"></tbody></table></div></div>
         </div>
         <div class="tables-grid">
-            <div><div class="section-title"><span>Monthly (Last 12 Months)<span class="avg-badge" id="avg_monthly"></span></span></div><div class="table-container"><table><thead><tr><th>Month</th><th class="num">IPv4</th><th class="num">IPv6</th><th class="num">VPN</th><th class="num">Tot</th></tr></thead><tbody id="tb_monthly"></tbody></table></div></div>
-            <div><div class="section-title"><span>Yearly History<span class="avg-badge" id="avg_yearly"></span></span></div><div class="table-container"><table><thead><tr><th>Year</th><th class="num">IPv4</th><th class="num">IPv6</th><th class="num">VPN</th><th class="num">Tot</th></tr></thead><tbody id="tb_yearly"></tbody></table></div></div>
+            <div><div class="section-title"><span>Monthly (Last 12 Months)<span class="avg-badge" id="avg_monthly"></span></span></div><div class="table-container"><table><thead><tr><th>Month</th><th class="num">IPv4</th><th class="num col-v6">IPv6</th><th class="num">VPN</th><th class="num">Tot</th></tr></thead><tbody id="tb_monthly"></tbody></table></div></div>
+            <div><div class="section-title"><span>Yearly History<span class="avg-badge" id="avg_yearly"></span></span></div><div class="table-container"><table><thead><tr><th>Year</th><th class="num">IPv4</th><th class="num col-v6">IPv6</th><th class="num">VPN</th><th class="num">Tot</th></tr></thead><tbody id="tb_yearly"></tbody></table></div></div>
         </div>
         <div class="tables-grid">
-            <div style="grid-column: 1 / -1;"><div class="section-title"><span>🏆 Top 10 Days by Volume (All Time)</span></div><div class="table-container"><table><thead><tr><th>Date</th><th class="num">IPv4</th><th class="num">IPv6</th><th class="num">VPN</th><th class="num">Total</th></tr></thead><tbody id="tb_top_days"></tbody></table></div></div>
+            <div style="grid-column: 1 / -1;"><div class="section-title"><span>🏆 Top 10 Days by Volume (All Time)</span></div><div class="table-container"><table><thead><tr><th>Date</th><th class="num">IPv4</th><th class="num col-v6">IPv6</th><th class="num">VPN</th><th class="num">Total</th></tr></thead><tbody id="tb_top_days"></tbody></table></div></div>
         </div>
     </div>
 
@@ -450,6 +482,12 @@ cat <<'HTML_EOF' > "$HTML_FILE"
                     document.getElementById('tb_ips_'+p).innerHTML = d.tables['ips_'+p];
                     document.getElementById('tb_nets_'+p).innerHTML = d.tables['nets_'+p];
                 });
+
+                // HIDE IPV6 IF DISABLED
+                if (d.ipv6_status === "false") {
+                    if(document.getElementById('card_v6')) document.getElementById('card_v6').style.display = 'none';
+                    document.querySelectorAll('.col-v6').forEach(el => el.style.display = 'none');
+                }
             }
         }
 
@@ -464,5 +502,82 @@ cat <<'HTML_EOF' > "$HTML_FILE"
 HTML_EOF
 chmod 644 "$HTML_FILE"
 fi
+
+# ==============================================================================
+# SHERLOCK MODE v2 (PARALLEL): Port Detective
+# ==============================================================================
+if command -v tcpdump >/dev/null 2>&1; then
+    echo " -> 🕵️ Running Sherlock (Parallel) for Top 10 Threats (Last 1 Hour)..."
+    
+    # 1. Identify Top 10 Active Threats
+    LIMIT_TS=$(sqlite3 "$DB_FILE" "SELECT strftime('%s', 'now', '-1 hour');")
+    QUERY_SHERLOCK="
+    SELECT d.ip 
+    FROM ip_drops d
+    JOIN ip_info i ON d.ip = i.ip 
+    WHERE d.timestamp > $LIMIT_TS 
+      AND (i.target_port IS NULL OR i.target_port = 0)
+    GROUP BY d.ip 
+    ORDER BY sum(d.count) DESC 
+    LIMIT 10;"
+    
+    TARGETS=$(sqlite3 "$DB_FILE" "$QUERY_SHERLOCK")
+    
+    if [ -n "$TARGETS" ]; then
+        # 2. Build BPF Filter: (src IP1 or src IP2 or src IP3 ...)
+        FILTER_EXPR=""
+        for IP in $TARGETS; do
+            if [ -z "$FILTER_EXPR" ]; then FILTER_EXPR="src $IP"; else FILTER_EXPR="$FILTER_EXPR or src $IP"; fi
+        done
+        # Add TCP SYN Flag check
+        FILTER_EXPR="($FILTER_EXPR) and tcp[tcpflags] & (tcp-syn) != 0"
+        
+        echo "    Monitoring combined traffic for 60s..."
+        
+        # 3. Capture in ONE go (Timeout 60s)
+        DUMP_FILE="/tmp/sherlock_capture.txt"
+        timeout 60 tcpdump -i ppp0 -nn "$FILTER_EXPR" -c 50 > "$DUMP_FILE" 2>/dev/null
+        
+        # 4. Analyze Dump
+        IFS=$'\n'
+        for IP in $TARGETS; do
+            # Extract port from dump for this IP
+            # Line format: IP 1.2.3.4.12345 > 192.168.1.1.445: Flags [S]...
+            PORT=$(grep "$IP" "$DUMP_FILE" | head -n 1 | awk '{print $5}' | awk -F. '{print $NF}' | cut -d: -f1)
+            
+            if [ -n "$PORT" ] && [ "$PORT" -gt 0 ] 2>/dev/null; then
+                echo "    ✅ Found for $IP: Port $PORT"
+                sqlite3 "$DB_FILE" "UPDATE ip_info SET target_port='$PORT' WHERE ip='$IP';"
+            else
+                echo "    ❌ No packet for $IP (in 60s window)"
+            fi
+        done
+        unset IFS
+        rm -f "$DUMP_FILE"
+    else
+        echo "    No unknown targets active in the last hour."
+    fi
+else
+    echo " -> 🕵️ Sherlock Skipped: 'tcpdump' not installed."
+fi
+
+# --- SUMMARY REPORT ---
+TOTAL_NEW_DROPS=$((NEW_DROPS_V4 + NEW_DROPS_V6 + NEW_DROPS_VPN))
+DB_SIZE_H=$(du -h "$DB_FILE" 2>/dev/null | awk '{print $1}')
+
+echo ""
+echo "================================================"
+echo "           STATISTICS UPDATE SUMMARY            "
+echo "================================================"
+echo " New Drops Detected : +$TOTAL_NEW_DROPS"
+echo "   - IPv4           : +$NEW_DROPS_V4"
+echo "   - IPv6           : +$NEW_DROPS_V6"
+echo "   - VPN            : +$NEW_DROPS_VPN"
+echo "------------------------------------------------"
+echo " New IP Records     : +$NEW_IP_RECORDS"
+echo " Database Size      : $DB_SIZE_H"
+echo "================================================"
+
+logger -t "$LOG_TAG" "SUMMARY | Drops: +$TOTAL_NEW_DROPS (v4:$NEW_DROPS_V4 v6:$NEW_DROPS_V6 vpn:$NEW_DROPS_VPN) | New IPs: +$NEW_IP_RECORDS | DB: $DB_SIZE_H"
 
 echo "Done."
