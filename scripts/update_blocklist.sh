@@ -1,7 +1,7 @@
 #!/bin/sh
 
 # ==============================================================================
-# BLOCKLIST UPDATER v2.2.1 (SUMMARY LOG)
+# BLOCKLIST UPDATER v2.2.2 (SUMMARY LOG)
 # Features: 
 # - CONFIG: Reads /opt/etc/firewall.conf for ENABLE_IPV6 and SOURCE URLS.
 # - REPORTING: Generates a detailed summary in Syslog and Terminal.
@@ -33,7 +33,14 @@ MAX_ELEM_V4=524288
 MAX_ELEM_V6=65536
 
 # API Key
-ABUSEIPDB_KEY="" 
+# --- SECURE KEY LOADING ---
+KEY_FILE="/opt/etc/AbuseIPDB.key"
+if [ -s "$KEY_FILE" ]; then
+    # Read key and strip any whitespace/newlines
+    ABUSEIPDB_KEY=$(cat "$KEY_FILE" | tr -d '[:space:]')
+else
+    ABUSEIPDB_KEY=""
+fi
 ABUSE_CACHE="/opt/etc/abuseipdb_v6.cache"
 CACHE_DURATION=21600
 
@@ -70,7 +77,7 @@ load_turbo() {
     sed "s/^/add $SET_NAME /" "$FILE_CLEAN" | ipset restore -!
 }
 
-echo "=== Firewall Blocklist Updater v2.2.1 ==="
+echo "=== Firewall Blocklist Updater v2.2.2 ==="
 echo "[$(date '+%H:%M:%S')] Starting update. IPv6 Mode: $ENABLE_IPV6"
 
 # --- 1. INIT IPSETS ---
@@ -233,4 +240,3 @@ echo "================================================"
 
 # Write one-line summary to Syslog
 logger -t "$LOG_TAG" "SUMMARY | IPv4: $RES_V4 ($CHG_V4) | IPv6: $RES_V6 ($CHG_V6) | VPN-Opt: -$CHG_VPN"
-
