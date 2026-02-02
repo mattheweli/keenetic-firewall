@@ -1,7 +1,7 @@
 #!/bin/sh
 
 # ==============================================================================
-# ABUSEIPDB AUTO-REPORTER v1.0.7 (SHERLOCK PRIORITY)
+# ABUSEIPDB AUTO-REPORTER v1.0.8 (SHERLOCK PRIORITY)
 # Description: Reports attackers to AbuseIPDB using POST method.
 # Features:
 #   - SHERLOCK PRIORITY: If a port is detected, report REGARDLESS of Risk Score.
@@ -13,8 +13,14 @@ export PATH=/opt/bin:/opt/sbin:/usr/bin:/usr/sbin:/bin:/sbin
 
 # --- CONFIG ---
 DB_FILE="/opt/etc/firewall_stats.db"
-# Retrieve Key from the updater script
-API_KEY=$(grep 'ABUSEIPDB_KEY=' /opt/bin/update_blocklist.sh 2>/dev/null | cut -d'"' -f2)
+# --- SECURE KEY LOADING ---
+KEY_FILE="/opt/etc/AbuseIPDB.key"
+if [ -s "$KEY_FILE" ]; then
+    # Read key and strip any whitespace/newlines
+    ABUSEIPDB_KEY=$(cat "$KEY_FILE" | tr -d '[:space:]')
+else
+    ABUSEIPDB_KEY=""
+fi
 LOG_TAG="Abuse_Reporter"
 
 # Risk Thresholds (Report only if >= MIN and <= MAX)
@@ -27,7 +33,7 @@ VPN_PORT="447"
 VPN_PROTO="TCP"
 
 # --- INITIALIZATION ---
-if [ -z "$API_KEY" ]; then 
+if [ -z "$ABUSEIPDB_KEY" ]; then 
     echo "Error: API Key not found in update_blocklist.sh"
     logger -t "$LOG_TAG" "ERROR: API Key missing. Aborting."
     exit 1
@@ -40,7 +46,7 @@ ONE_DAY_AGO=$((NOW - 86400))
 
 CNT_TOTAL=0; CNT_SUCCESS=0; CNT_FAIL=0
 
-echo "=== AbuseIPDB Reporter v1.0.7 ==="
+echo "=== AbuseIPDB Reporter v1.0.8 ==="
 
 # ENHANCED QUERY:
 # 1. Select if Risk is within range (>= MIN and <= MAX)
@@ -98,7 +104,7 @@ for LINE in $CANDIDATES; do
         --data-urlencode "ip=$IP" \
         --data-urlencode "categories=$CATS" \
         --data-urlencode "comment=$COMMENT" \
-        -H "Key: $API_KEY" \
+        -H "Key: $ABUSEIPDB_KEY" \
         -H "Accept: application/json")
     
     if echo "$RESPONSE" | grep -q '"ipAddress"'; then
