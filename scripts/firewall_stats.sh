@@ -1,7 +1,7 @@
 #!/bin/sh
 
 # ==============================================================================
-# KEENTOOL FIREWALL STATS v3.2.3 (LIFETIME GLOBAL)
+# KEENTOOL FIREWALL STATS v3.2.4 (LIFETIME GLOBAL)
 # Features: 
 # - RETENTION: IP Details kept 30 days. Global Stats kept FOREVER (Lifetime).
 # - SHERLOCK: Uses tcpdump to identify target ports for Top 10 active threats.
@@ -39,7 +39,14 @@ DIFF_FILE_V6="/opt/etc/firewall_v6_diff.dat"
 DIFF_FILE_VPN="/opt/etc/firewall_vpn_diff.dat"
 VPN_SIZE_FILE="/opt/etc/firewall_vpn_last_size.dat"
 IP_LAST_STATE="/opt/etc/firewall_ip_counters.dat"
-ABUSEIPDB_KEY=$(grep 'ABUSEIPDB_KEY=' /opt/bin/update_blocklist.sh 2>/dev/null | cut -d'"' -f2) 
+# --- SECURE KEY LOADING ---
+KEY_FILE="/opt/etc/AbuseIPDB.key"
+if [ -s "$KEY_FILE" ]; then
+    # Read key and strip any whitespace/newlines
+    ABUSEIPDB_KEY=$(cat "$KEY_FILE" | tr -d '[:space:]')
+else
+    ABUSEIPDB_KEY=""
+fi 
 
 mkdir -p "$WEB_DIR"
 DATE_CMD="/opt/bin/date"; [ ! -x "$DATE_CMD" ] && DATE_CMD="date"
@@ -48,7 +55,7 @@ DATE_CMD="/opt/bin/date"; [ ! -x "$DATE_CMD" ] && DATE_CMD="date"
 NEW_DROPS_V4=0; NEW_DROPS_V6=0; NEW_DROPS_VPN=0
 NEW_IP_RECORDS=0
 
-echo "=== Firewall Stats Updater v3.2.3 ==="
+echo "=== Firewall Stats Updater v3.2.4 ==="
 echo " -> Mode: IPv6=$ENABLE_IPV6"
 
 # 1. DB INIT & UPGRADE
