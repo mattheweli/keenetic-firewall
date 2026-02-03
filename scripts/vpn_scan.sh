@@ -1,15 +1,25 @@
 #!/bin/sh
 
 # ==============================================================================
-# VPN LOG ANALYZER v1.3.1 (FULL LOGGING)
+# VPN LOG ANALYZER v1.3.2 (AUTO-DETECT LOG)
 # Features:
+# - LOG SOURCE: Automatically switches between vpn.log and messages.
 # - INTERACTIVE: Echoes status to terminal.
-# - LOGGING: Logs Summary even if IPs were just skipped (already blocked).
 # - SYNC: Restores IPs from local file to RAM.
 # ==============================================================================
 
+export PATH=/opt/bin:/opt/sbin:/usr/bin:/usr/sbin:/bin:/sbin
+
 # --- PATHS ---
-LOG_FILE="/opt/var/log/messages"
+# Auto-detect Log Source based on Keentool Modular Logging
+if [ -f "/opt/var/log/vpn.log" ]; then
+    LOG_FILE="/opt/var/log/vpn.log"
+    echo -e " -> Mode: ${GREEN}Modular Log${RESET} (Reading vpn.log)"
+else
+    LOG_FILE="/opt/var/log/messages"
+    echo -e " -> Mode: ${YELLOW}Standard Log${RESET} (Reading messages)"
+fi
+
 BANNED_IPS_FILE="/opt/etc/vpn_banned_ips.txt"
 DIFF_FILE_VPN="/opt/etc/firewall_vpn_diff.dat"
 
@@ -17,7 +27,9 @@ IPSET_VPN="VPNBlock"
 IPSET_MAIN="FirewallBlock"
 LOG_TAG="VPN_Blocker"
 
-# Regex
+# Regex for Attack Patterns
+# 1. TLS Error (OpenVPN)
+# 2. Bad Packet Length (WireGuard/OpenVPN overflow)
 SEARCH_PATTERN='TLS handshake failed|Bad encapsulated packet length'
 
 # Colors
@@ -34,7 +46,7 @@ CNT_SKIPPED=0
 
 # Init
 touch "$BANNED_IPS_FILE"
-echo -e "${BOLD}=== VPN Security Scanner v1.3.1 ===${RESET}"
+echo -e "${BOLD}=== VPN Security Scanner v1.3.2 ===${RESET}"
 
 if [ ! -f "$LOG_FILE" ]; then
     echo -e "${RED}Error: Log file not found ($LOG_FILE).${RESET}"
@@ -43,64 +55,72 @@ if [ ! -f "$LOG_FILE" ]; then
 fi
 
 # ==============================================================================
-# 1. SYNC PHASE (Persistence & Optimization)
+# 1. RESTORE PERSISTENT BANS (File -> RAM)
 # ==============================================================================
-echo -n " -> Syncing persistence file... "
-
+echo -n " -> Syncing persistent bans... "
 if [ -s "$BANNED_IPS_FILE" ]; then
-    TMP_CLEAN="/tmp/vpn_clean_list.tmp"
-    : > "$TMP_CLEAN"
+    # Filter valid IPs only to avoid garbage
+    VALID_IPS=$(grep -Eo '([0-9]{1,3}\.){3}[0-9]{1,3}' "$BANNED_IPS_FILE" | sort -u)
     
-    while read -r SAVED_IP; do
-        [ -z "$SAVED_IP" ] && continue
-
-        # Check Global List (FirewallBlock)
-        if ipset test "$IPSET_MAIN" "$SAVED_IP" >/dev/null 2>&1; then
-            # OPTIMIZATION: IP is globally blocked. Remove from VPN set to save RAM.
-            ipset del "$IPSET_VPN" "$SAVED_IP" 2>/dev/null
+    IFS=$'\n'
+    for IP in $VALID_IPS; do
+        # Check Main Firewall First (Optimization)
+        if ipset test "$IPSET_MAIN" "$IP" 2>/dev/null; then
             CNT_OPTIMIZED=$((CNT_OPTIMIZED + 1))
-        else
-            # IP needs to be in VPN RAM list
-            ipset add "$IPSET_VPN" "$SAVED_IP" -exist 2>/dev/null
-            echo "$SAVED_IP" >> "$TMP_CLEAN"
-            CNT_RESTORED=$((CNT_RESTORED + 1))
-        fi
-    done < "$BANNED_IPS_FILE"
-    
-    mv "$TMP_CLEAN" "$BANNED_IPS_FILE"
-fi
-echo -e "${GREEN}Done.${RESET}"
-
-# ==============================================================================
-# 2. SCAN PHASE (Log Analysis)
-# ==============================================================================
-echo -n " -> Scanning OpenVPN logs... "
-
-# Extract unique IPs
-MALICIOUS_IPS=$(grep -i "openvpn" "$LOG_FILE" | grep -E "$SEARCH_PATTERN" | grep -oE "\b([0-9]{1,3}\.){3}[0-9]{1,3}\b" | sort -u)
-
-# Count lines
-NUM_FOUND=$(echo "$MALICIOUS_IPS" | grep -cE '^[0-9]')
-
-if [ "$NUM_FOUND" -gt 0 ]; then
-    echo -e "${YELLOW}Found $NUM_FOUND suspicious IPs.${RESET}"
-    
-    for IP in $MALICIOUS_IPS; do
-        # A. Check Global List
-        if ipset test "$IPSET_MAIN" "$IP" >/dev/null 2>&1; then
-            CNT_SKIPPED=$((CNT_SKIPPED + 1))
             continue
         fi
+        
+        # Check/Add to VPN Set
+        if ! ipset test "$IPSET_VPN" "$IP" 2>/dev/null; then
+            ipset add "$IPSET_VPN" "$IP" 2>/dev/null
+            CNT_RESTORED=$((CNT_RESTORED + 1))
+        fi
+    done
+    unset IFS
+fi
+echo "Done."
 
-        # B. Check Local File (Avoid duplicates)
-        if ! grep -qF "$IP" "$BANNED_IPS_FILE"; then
-            # BAN ACTION
-            ipset add "$IPSET_VPN" "$IP" -exist 2>/dev/null
-            echo "$IP" >> "$BANNED_IPS_FILE"
+# ==============================================================================
+# 2. SCAN LOGS FOR NEW THREATS
+# ==============================================================================
+echo -n " -> Scanning logs for threats... "
+
+# Extract IPs from Log lines matching the pattern
+# Grep logic: Find pattern -> Extract IP using regex
+ATTACKER_IPS=$(grep -E "$SEARCH_PATTERN" "$LOG_FILE" | grep -Eo '([0-9]{1,3}\.){3}[0-9]{1,3}' | sort -u)
+
+if [ -n "$ATTACKER_IPS" ]; then
+    echo ""
+    for IP in $ATTACKER_IPS; do
+        # 1. Check if already Global Banned (Skip)
+        if ipset test "$IPSET_MAIN" "$IP" 2>/dev/null; then
+            echo -e "    - $IP: ${CYAN}Global Blocked${RESET}"
+            continue
+        fi
+        
+        # 2. Check if already VPN Banned
+        if ipset test "$IPSET_VPN" "$IP" 2>/dev/null; then
+            echo -e "    - $IP: ${YELLOW}Already Banned${RESET}"
+            CNT_SKIPPED=$((CNT_SKIPPED + 1))
+        else
+            # 3. BAN HAMMER
+            echo -e "    - $IP: ${RED}BANNING${RESET}"
             
-            # Logs
-            echo -e "    ! ${RED}BANNED:${RESET} $IP"
-            logger -t "${LOG_TAG}" "ACTION: Banned IP $IP (OpenVPN Attack)"
+            # Add to RAM
+            ipset add "$IPSET_VPN" "$IP" 2>/dev/null
+            
+            # Add to Persistent File (if not present)
+            if ! grep -q "$IP" "$BANNED_IPS_FILE"; then
+                echo "$IP" >> "$BANNED_IPS_FILE"
+            fi
+            
+            # Kill active states
+            ndmc -c "show ip hotspot" | grep -B 5 "$IP" | grep "mac" | awk '{print $3}' | tr -d ',' | while read MAC; do
+                [ -n "$MAC" ] && ndmc -c "ip hotspot disconnect $MAC" >/dev/null 2>&1
+            done
+            
+            # Log action
+            logger -t "${LOG_TAG}" "ACTION: Banned IP $IP (VPN Attack)"
             
             CNT_BANNED=$((CNT_BANNED + 1))
         fi
@@ -132,9 +152,7 @@ echo -e "  - Skipped      : ${YELLOW}${CNT_SKIPPED}${RESET} (Already Blocked)"
 echo -e "  - New Bans     : ${RED}${CNT_BANNED}${RESET}"
 echo -e "-----------------------------------"
 
-# System Log Summary (Always log if there was ANY activity/detection, even if skipped)
-if [ "$CNT_OPTIMIZED" -gt 0 ] || [ "$CNT_BANNED" -gt 0 ] || [ "$CNT_SKIPPED" -gt 0 ]; then
-    logger -t "${LOG_TAG}" "Scan Finished. NewBans: $CNT_BANNED | Skipped (Global): $CNT_SKIPPED | Optimized: $CNT_OPTIMIZED"
+# System Log Summary (Always log if there was ANY activity/check)
+if [ "$CNT_BANNED" -gt 0 ] || [ "$CNT_RESTORED" -gt 0 ]; then
+    logger -t "${LOG_TAG}" "Scan Finished. Restored: $CNT_RESTORED | New Bans: $CNT_BANNED"
 fi
-
-exit 0
