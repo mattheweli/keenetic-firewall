@@ -1,7 +1,7 @@
 #!/bin/sh
 
 # ==============================================================================
-# ABUSEIPDB AUTO-REPORTER v1.0.8 (SHERLOCK PRIORITY)
+# ABUSEIPDB AUTO-REPORTER v1.0.9 (SHERLOCK PRIORITY)
 # Description: Reports attackers to AbuseIPDB using POST method.
 # Features:
 #   - SHERLOCK PRIORITY: If a port is detected, report REGARDLESS of Risk Score.
@@ -89,11 +89,11 @@ for LINE in $CANDIDATES; do
         TYPE_LBL="VPN ($VPN_PORT)"
     elif [ -n "$DB_PORT" ] && [ "$DB_PORT" != "0" ] && [ "$DB_PORT" != "" ]; then
         CATS="14" # Port Scan
-        COMMENT="Unauthorized connection attempt blocked by Firewall (Target Port: $DB_PORT)."
+        COMMENT="Unauthorized connection attempt blocked by Keenetic Firewall (Target Port: $DB_PORT)."
         TYPE_LBL="Sherlock ($DB_PORT)"
     else
         CATS="14" # Port Scan
-        COMMENT="Unauthorized connection attempt blocked by Firewall (Port Scan)."
+        COMMENT="Unauthorized connection attempt blocked by Keenetic Firewall (Port Scan)."
         TYPE_LBL="Generic"
     fi
     
