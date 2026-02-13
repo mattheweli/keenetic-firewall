@@ -1,11 +1,12 @@
 #!/bin/sh
 
 # ==============================================================================
-# KEENETIC FIREWALL MONITOR v3.1.0 (ADAPTIVE SCAN)
+# KEENETIC FIREWALL MONITOR v3.2.0 (AUTOBAN EDITION)
 # Features: 
 #   - CONFIG: Reads /opt/etc/firewall.conf to toggle IPv6 monitoring.
 #   - PERFORMANCE: Skips ip6tables calls if IPv6 is disabled.
 #   - ADAPTIVE POLL: Scans fast (4s) when list is empty, slow (30s) when full.
+#   - AUTOBAN: Now tracks dynamic AutoBan lists for real-time stats.
 # ==============================================================================
 
 export PATH=/opt/bin:/opt/sbin:/usr/bin:/usr/sbin:/bin:/sbin
@@ -14,8 +15,14 @@ export PATH=/opt/bin:/opt/sbin:/usr/bin:/usr/sbin:/bin:/sbin
 CONF_FILE="/opt/etc/firewall.conf"
 if [ -f "$CONF_FILE" ]; then . "$CONF_FILE"; else ENABLE_IPV6="true"; fi
 
+# IPSet Names (Static)
 IPSET_V4="FirewallBlock"
 IPSET_V6="FirewallBlock6"
+
+# IPSet Names (Dynamic/AutoBan)
+IPSET_BAN="AutoBan"
+IPSET_BAN6="AutoBan6"
+
 DB_FILE="/opt/etc/firewall_stats.db"
 REFRESH_RATE=2       # Base display update (seconds)
 
@@ -46,8 +53,14 @@ trap cleanup INT TERM
 # --- HELPER FUNCTIONS ---
 format_num() { echo "$1" | awk '{ printf "%'\''d", $1 }'; }
 
-get_iptables_count() {
-    $1 -L "$2" -v -x -n 2>/dev/null | grep -w "match-set $3" | awk '{sum+=$1} END {print sum+0}'
+# Sums drops from Static List AND AutoBan List
+get_combined_count() {
+    # $1=cmd, $2=chain, $3=static_set, $4=ban_set
+    $1 -L "$2" -v -x -n 2>/dev/null | awk -v s="$3" -v b="$4" '
+        $0 ~ "match-set " s { sum += $1 }
+        $0 ~ "match-set " b { sum += $1 }
+        END { print sum+0 }
+    '
 }
 
 # Extracts clean "IP COUNT" list from ipset
@@ -61,21 +74,26 @@ echo -e "${BOLD}Initializing Session Monitor...${RESET}"
 echo -e "${DIM}Taking baseline snapshot (Mode: IPv6=$ENABLE_IPV6)...${RESET}"
 
 # 1. Take Baseline Snapshot (Start of Session)
+# We now dump BOTH static and dynamic lists to catch all attackers
 : > "$SNAP_START"
 {
     dump_ipset_clean "$IPSET_V4"
-    if [ "$ENABLE_IPV6" = "true" ]; then dump_ipset_clean "$IPSET_V6"; fi
+    dump_ipset_clean "$IPSET_BAN"
+    if [ "$ENABLE_IPV6" = "true" ]; then 
+        dump_ipset_clean "$IPSET_V6"
+        dump_ipset_clean "$IPSET_BAN6"
+    fi
 } >> "$SNAP_START"
 
-# 2. Initial Counters
-START_V4_IN=$(get_iptables_count "iptables" "BLOCKLIST_IN" "$IPSET_V4")
-START_V4_FW=$(get_iptables_count "iptables" "BLOCKLIST_FWD" "$IPSET_V4")
+# 2. Initial Counters (Combined Static + Dynamic)
+START_V4_IN=$(get_combined_count "iptables" "BLOCKLIST_IN" "$IPSET_V4" "$IPSET_BAN")
+START_V4_FW=$(get_combined_count "iptables" "BLOCKLIST_FWD" "$IPSET_V4" "$IPSET_BAN")
 START_TOTAL_V4=$((START_V4_IN + START_V4_FW))
 
 START_TOTAL_V6=0
 if [ "$ENABLE_IPV6" = "true" ]; then
-    START_V6_IN=$(get_iptables_count "ip6tables" "BLOCKLIST_IN6" "$IPSET_V6")
-    START_V6_FW=$(get_iptables_count "ip6tables" "BLOCKLIST_FWD6" "$IPSET_V6")
+    START_V6_IN=$(get_combined_count "ip6tables" "BLOCKLIST_IN6" "$IPSET_V6" "$IPSET_BAN6")
+    START_V6_FW=$(get_combined_count "ip6tables" "BLOCKLIST_FWD6" "$IPSET_V6" "$IPSET_BAN6")
     START_TOTAL_V6=$((START_V6_IN + START_V6_FW))
 fi
 
@@ -87,15 +105,15 @@ LAST_SCAN_TIME="Pending..."
 # --- MAIN LOOP ---
 while true; do
     # 1. Light Task: Global Counters (Instant)
-    CUR_V4_IN=$(get_iptables_count "iptables" "BLOCKLIST_IN" "$IPSET_V4")
-    CUR_V4_FW=$(get_iptables_count "iptables" "BLOCKLIST_FWD" "$IPSET_V4")
+    CUR_V4_IN=$(get_combined_count "iptables" "BLOCKLIST_IN" "$IPSET_V4" "$IPSET_BAN")
+    CUR_V4_FW=$(get_combined_count "iptables" "BLOCKLIST_FWD" "$IPSET_V4" "$IPSET_BAN")
     CUR_TOT_V4=$((CUR_V4_IN + CUR_V4_FW))
     SESS_V4=$((CUR_TOT_V4 - START_TOTAL_V4))
 
     CUR_TOT_V6=0; SESS_V6=0
     if [ "$ENABLE_IPV6" = "true" ]; then
-        CUR_V6_IN=$(get_iptables_count "ip6tables" "BLOCKLIST_IN6" "$IPSET_V6")
-        CUR_V6_FW=$(get_iptables_count "ip6tables" "BLOCKLIST_FWD6" "$IPSET_V6")
+        CUR_V6_IN=$(get_combined_count "ip6tables" "BLOCKLIST_IN6" "$IPSET_V6" "$IPSET_BAN6")
+        CUR_V6_FW=$(get_combined_count "ip6tables" "BLOCKLIST_FWD6" "$IPSET_V6" "$IPSET_BAN6")
         CUR_TOT_V6=$((CUR_V6_IN + CUR_V6_FW))
         SESS_V6=$((CUR_TOT_V6 - START_TOTAL_V6))
     fi
@@ -104,11 +122,15 @@ while true; do
     if [ "$CYCLE" -ge "$CURRENT_LIMIT" ]; then
         STATUS_TXT="Analyzing..."
         
-        # A. Grab Current State
+        # A. Grab Current State (All Lists)
         : > "$SNAP_CURR"
         {
             dump_ipset_clean "$IPSET_V4"
-            if [ "$ENABLE_IPV6" = "true" ]; then dump_ipset_clean "$IPSET_V6"; fi
+            dump_ipset_clean "$IPSET_BAN"
+            if [ "$ENABLE_IPV6" = "true" ]; then 
+                dump_ipset_clean "$IPSET_V6"
+                dump_ipset_clean "$IPSET_BAN6"
+            fi
         } >> "$SNAP_CURR"
         
         # B. Calculate Delta
@@ -157,7 +179,7 @@ while true; do
     # 3. DRAW UI
     clear
     echo -e "${BOLD}${BLUE}╔════════════════════════════════════════════════╗${RESET}"
-    echo -e "${BOLD}${BLUE}║    KEENETIC FIREWALL SESSION MONITOR v3.1.0    ║${RESET}"
+    echo -e "${BOLD}${BLUE}║    KEENETIC FIREWALL SESSION MONITOR v3.2.0    ║${RESET}"
     echo -e "${BOLD}${BLUE}╚════════════════════════════════════════════════╝${RESET}"
     echo ""
     
@@ -175,7 +197,7 @@ while true; do
     echo -e "${DIM} ------------------------------------------------${RESET}"
     
     echo ""
-    echo -e "${YELLOW} [ TOP ATTACKERS ] ${DIM}(Upd: $LAST_SCAN_TIME)${RESET}"
+    echo -e "${YELLOW} [ TOP ATTACKERS (Static + AutoBan) ] ${DIM}(Upd: $LAST_SCAN_TIME)${RESET}"
     echo -e "$TOP5_CACHE"
     echo ""
     echo -e "${DIM} ------------------------------------------------${RESET}"
