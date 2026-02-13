@@ -1,0 +1,366 @@
+<!-- Firewall Dashboard v1.0.1 -->
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Keenetic Firewall Stats</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🛡️</text></svg>">
+    <style>
+        :root { --bg: #f4f7f6; --card: #ffffff; --text: #333; --muted: #6c757d; --border: #e9ecef; --th-bg: #f8f9fa; --red: #dc3545; --orange: #fd7e14; --blue: #0d6efd; --green: #198754; --purple: #6f42c1; --dark: #212529; --shadow: rgba(0,0,0,0.03); --diff-pos: rgba(25, 135, 84, 0.1); --diff-neg: rgba(220, 53, 69, 0.1); --diff-eq: rgba(108, 117, 125, 0.1); --link: #0d6efd; }
+        /* [FIX v3.17] Added --dark variable override for Dark Mode */
+        @media (prefers-color-scheme: dark) { :root { --bg: #121212; --card: #1e1e1e; --text: #e0e0e0; --muted: #a0a0a0; --border: #2c2c2c; --th-bg: #252525; --shadow: rgba(0,0,0,0.5); --diff-pos: rgba(25, 135, 84, 0.2); --diff-neg: rgba(220, 53, 69, 0.2); --diff-eq: rgba(108, 117, 125, 0.2); --link: #6ea8fe; --dark: #e0e0e0; } }
+        body { font-family: -apple-system, sans-serif; background: var(--bg); color: var(--text); padding: 20px; max-width: 1400px; margin: 0 auto; transition: background 0.3s; }
+        .status-bar { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; background: var(--card); padding: 15px 20px; border-radius: 8px; border: 1px solid var(--border); margin-bottom: 25px; gap: 15px; }
+        .header-title { margin: 0; font-weight: 700; display: flex; align-items: center; gap: 15px; font-size: 1.5rem; }
+        .btn-home { text-decoration: none; font-size: 22px; border-right: 1px solid var(--border); padding-right: 15px; transition: transform 0.2s; } .btn-home:hover { transform: scale(1.1); }
+        .controls { display: flex; align-items: center; gap: 10px; }
+        .refresh-select { background: var(--card); color: var(--text); border: 1px solid var(--border); padding: 6px 10px; border-radius: 20px; font-size: 0.8rem; font-weight: 600; cursor: pointer; outline: none; }
+        .update-dot { height: 8px; width: 8px; border-radius: 50%; background-color: var(--muted); display: inline-block; opacity: 0.5; margin-left:5px; transition: all 0.3s; }
+        .update-dot.active { background-color: var(--green); opacity: 1; box-shadow: 0 0 5px var(--green); transform: scale(1.5); }
+        .grid-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin-bottom: 30px; }
+        .card { background: var(--card); padding: 20px; border-radius: 10px; box-shadow: 0 2px 10px var(--shadow); border: 1px solid var(--border); }
+        .card h3 { margin: 0 0 10px; font-size: 11px; text-transform: uppercase; color: var(--muted); letter-spacing: 1px; font-weight: 600; }
+        .card .val { font-size: 28px; font-weight: 800; line-height: 1.2; }
+        .diff { font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 12px; margin-left: 8px; vertical-align: middle; }
+        .diff.pos { background: var(--diff-pos); color: var(--green); } .diff.neg { background: var(--diff-neg); color: var(--red); } .diff.eq { background: var(--diff-eq); color: var(--muted); }
+        .sub-val { display: block; font-size: 11px; color: var(--muted); margin-top: 5px; font-weight: 500; }
+        .main-tabs { display: flex; gap: 10px; margin-bottom: 20px; }
+        .main-tab-btn { flex: 1; padding: 12px; background: var(--card); border: 1px solid var(--border); border-radius: 8px; cursor: pointer; font-weight: 700; color: var(--muted); font-size: 14px; transition: all 0.2s; box-shadow: 0 2px 5px var(--shadow); }
+        .main-tab-btn.active { background: var(--blue); color: #fff; border-color: var(--blue); }
+        .view-section { display: none; } .view-section.active { display: block; }
+        .section-title { margin-bottom: 15px; font-size: 15px; font-weight: 700; color: var(--muted); display: flex; align-items: center; justify-content: space-between; }
+        .section-title span { display: flex; align-items: center; } .section-title span::before { content: ''; display: inline-block; width: 4px; height: 16px; background: var(--blue); margin-right: 10px; border-radius: 2px; }
+        
+        /* NEW LAYOUTS */
+        .tables-grid { display: grid; grid-template-columns: 1fr; gap: 25px; margin-bottom: 25px; } 
+        @media(min-width: 900px) { .tables-grid { grid-template-columns: 1fr 1fr; } }
+        
+        /* [FIXED] STRICT 3-COLUMN GRID */
+        .triple-grid { display: grid; grid-template-columns: 1fr; gap: 20px; }
+        @media(min-width: 1200px) { .triple-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+        
+        .sub-header { font-size: 12px; text-transform: uppercase; color: var(--muted); font-weight: 700; margin-bottom: 10px; border-bottom: 2px solid var(--border); padding-bottom: 5px; }
+        .table-container { background: var(--card); border-radius: 10px; box-shadow: 0 2px 10px var(--shadow); border: 1px solid var(--border); overflow-x: auto; -webkit-overflow-scrolling: touch; }
+        
+        /* [FIXED] TABLE LAYOUT + VISIBILITY */
+        table { width: 100%; border-collapse: collapse; white-space: nowrap; table-layout: fixed; }
+        th { background: var(--th-bg); padding: 10px 12px; text-align: left; font-size: 11px; text-transform: uppercase; color: var(--muted); font-weight: 700; border-bottom: 1px solid var(--border); }
+        
+        /* Changed to 'normal' to allow wrapping so links are not cut off */
+        td { padding: 8px 12px; border-bottom: 1px solid var(--border); font-size: 13px; color: var(--text); vertical-align: middle; white-space: normal; word-break: break-all; }
+        
+        #view_sources tbody tr { height: 78px; vertical-align: middle; } #view_history tbody tr { height: auto; }
+        .meta { font-size: 13px; color: var(--muted); line-height: 1.3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .meta small { display: block; font-size: 11px; font-weight: 500; min-height: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 2px; }
+        .num { text-align: right; font-family: monospace; font-weight: 600; }
+        .col-main { color: var(--red); } td.col-v6 { color: var(--purple); } .col-vpn { color: var(--orange); } .col-trap { color: var(--dark); font-weight:800; }
+        .nodata { text-align: center; color: var(--muted); padding: 15px; font-style: italic; }
+        .avg-badge { font-size: 13px; font-weight: 600; color: #0d6efd; background: rgba(13, 110, 253, 0.08); padding: 2px 10px; border-radius: 20px; margin-left: 12px; }
+        @media (prefers-color-scheme: dark) { .avg-badge { color: #5c9eff; background: rgba(13, 110, 253, 0.15); } }
+        .tabs { display: flex; gap: 5px; }
+        .tab-btn { background: transparent; border: 1px solid var(--border); color: var(--muted); padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 11px; font-weight: 600; }
+        .tab-btn.active { background: var(--blue); color: #fff; border-color: var(--blue); }
+        .tab-content { display: none; } .tab-content.active { display: block; }
+        .badge { font-size: 10px; padding: 2px 6px; border-radius: 4px; color: #fff; font-weight: 700; } .bg-danger { background: var(--red); } .bg-primary { background: var(--blue); }
+        .footer { text-align: center; font-size: 11px; color: var(--muted); margin-top: 40px; }
+        
+        /* [FIX] Dynamic Link Color */
+        a { color: var(--link); text-decoration: none; font-weight: 600; }
+        
+        /* [FIX v3.12] Added white-space nowrap to badges */
+        .list-badge { font-size: 9px; padding: 1px 4px; border-radius: 3px; margin-left: 5px; text-transform: uppercase; font-weight: 700; border: 1px solid currentColor; white-space: nowrap; display: inline-block; }
+        .lb-main { color: var(--red); background: rgba(220,53,69,0.1); }
+        .lb-v6 { color: var(--purple); background: rgba(111,66,193,0.1); }
+        .lb-vpn { color: var(--orange); background: rgba(253,126,20,0.1); }
+        .lb-trap { color: var(--dark); background: rgba(33,37,41,0.1); }
+        .lb-exp { color: var(--muted); border: 1px solid var(--border); }
+        @media (prefers-color-scheme: dark) { .lb-trap { color: #aaa; background: rgba(255,255,255,0.1); } }
+
+        /* MODAL STYLES */
+        .modal { display: none; position: fixed; z-index: 1000; left: 0; top: 0; width: 100%; height: 100%; overflow: auto; background-color: rgba(0,0,0,0.5); backdrop-filter: blur(2px); }
+        .modal-content { background-color: var(--card); margin: 10% auto; padding: 25px; border-radius: 12px; width: 80%; max-width: 600px; box-shadow: 0 5px 20px rgba(0,0,0,0.3); border: 1px solid var(--border); animation: slideIn 0.3s; }
+        @keyframes slideIn { from {transform: translateY(-20px); opacity: 0;} to {transform: translateY(0); opacity: 1;} }
+        .modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; border-bottom: 1px solid var(--border); padding-bottom: 10px; }
+        .modal-title { margin: 0; font-size: 18px; font-weight: 700; }
+        .close { color: var(--muted); float: right; font-size: 28px; font-weight: bold; cursor: pointer; transition: color 0.2s; }
+        .close:hover { color: var(--red); }
+        .ip-list-container { max-height: 300px; overflow-y: auto; background: var(--bg); padding: 10px; border-radius: 6px; border: 1px solid var(--border); font-family: monospace; font-size: 12px; word-break: break-all; }
+        .modal-actions { margin-top: 15px; text-align: right; display: flex; gap: 10px; justify-content: flex-end; }
+        .btn-action { padding: 6px 12px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg); color: var(--text); cursor: pointer; font-size: 12px; font-weight: 600; transition: all 0.2s; }
+        .btn-action:hover { background: var(--border); }
+    </style>
+</head>
+<body>
+    <div class="status-bar">
+        <h2 class="header-title">
+            <a href="../index.html" class="btn-home" title="Back to Dashboard">🏠</a>
+            <span>🛡️ Keenetic Firewall Stats</span>
+        </h2>
+        <div class="controls">
+            <div id="loading_dot" class="update-dot"></div>
+            <select id="refresh_timer" class="refresh-select" onchange="changeRefreshRate(this.value)">
+                <option value="0">Auto-Refresh: OFF</option>
+                <option value="5000">5 Seconds</option>
+                <option value="10000">10 Seconds</option>
+                <option value="60000">1 Minute</option>
+                <option value="300000">5 Minutes</option>
+                <option value="900000">15 Minutes</option>
+                <option value="1800000">30 Minutes</option>
+                <option value="3600000">1 Hour</option>
+            </select>
+            <div style="font-size: 0.8rem; color: var(--muted);">Updated: <span id="last_update_header">-</span></div>
+        </div>
+    </div>
+
+    <div class="grid-cards">
+        <div class="card"><h3>IPv4 Blocklist</h3><div><span class="val" style="color:var(--red)" id="size_main">-</span><span id="diff_v4"></span></div></div>
+        <div class="card" id="card_v6"><h3>IPv6 Blocklist</h3><div><span class="val" style="color:var(--purple)" id="size_main6">-</span><span id="diff_v6"></span></div></div>
+        <div class="card"><h3>VPN Blocklist</h3><div><span class="val" style="color:var(--orange)" id="size_vpn">-</span><span id="diff_vpn"></span></div></div>
+        <div class="card">
+            <h3>🪤 Auto-Ban Trap</h3>
+            <div>
+                <span class="val" style="color:var(--dark)" id="size_trap_total">-</span>
+                <span style="font-size:12px; color:var(--muted); display:block;">v4: <b id="size_trap"></b> <span id="diff_trap"></span> | v6: <b id="size_trap6"></b> <span id="diff_trap6"></span></span>
+            </div>
+        </div>
+        <div class="card"><h3>Total Drops (Lifetime)</h3><div class="val" style="color:var(--blue)" id="lifetime">-</div></div>
+    </div>
+
+    <div class="main-tabs">
+        <button class="main-tab-btn active" onclick="showMainTab('sources')">📊 Threat Analysis</button>
+        <button class="main-tab-btn" onclick="showMainTab('history')">📅 Traffic History</button>
+    </div>
+
+    <div id="view_sources" class="view-section active">
+        <div class="section-title"><span>🏆 Top Threats & Targets (Triple View)</span>
+            <div class="tabs">
+                <button class="tab-btn active" onclick="showTab('24h')">24h</button>
+                <button class="tab-btn" onclick="showTab('30d')">30 Days</button>
+                <button class="tab-btn" onclick="showTab('1y')">Yearly</button>
+                <button class="tab-btn" onclick="showTab('all')">All Time</button>
+            </div>
+        </div>
+        
+        <div id="tab_24h" class="tab-content active">
+            <div class="triple-grid">
+                <div><div class="sub-header">Honeypot Victims</div><div class="table-container"><table><thead><tr><th style="width:60px">Cnt</th><th>Source</th><th>Info</th></tr></thead><tbody id="tb_trap_24h"></tbody></table></div></div>
+                <div><div class="sub-header">Static Blocks</div><div class="table-container"><table><thead><tr><th style="width:60px">Cnt</th><th>Source</th><th>Info</th></tr></thead><tbody id="tb_other_24h"></tbody></table></div></div>
+                <div><div class="sub-header">Top Active Subnets</div><div class="table-container"><table><thead><tr><th style="width:60px">Cnt</th><th>Subnet</th><th>Info</th></tr></thead><tbody id="tb_nets_24h"></tbody></table></div></div>
+            </div>
+            <div class="triple-grid" style="margin-top:20px;">
+                <div><div class="sub-header">Global Targeted Ports</div><div class="table-container"><table><thead><tr><th style="width:60px">Port</th><th>Top Attackers</th><th class="num" style="width:60px">Hits</th></tr></thead><tbody id="tb_ports_24h"></tbody></table></div></div>
+                <div><div class="sub-header">Honeypot/Brute Ports</div><div class="table-container"><table><thead><tr><th style="width:60px">Port</th><th>Top Attackers</th><th class="num" style="width:60px">Hits</th></tr></thead><tbody id="tb_brute_24h"></tbody></table></div></div>
+                <div><div class="sub-header">IPv6 Top Hitters</div><div class="table-container"><table><thead><tr><th style="width:60px">Cnt</th><th>Source</th><th>Info</th></tr></thead><tbody id="tb_ipv6_24h"></tbody></table></div></div>
+            </div>
+        </div>
+
+        <div id="tab_30d" class="tab-content">
+            <div class="triple-grid">
+                <div><div class="sub-header">Honeypot Victims</div><div class="table-container"><table><thead><tr><th style="width:60px">Cnt</th><th>Source</th><th>Info</th></tr></thead><tbody id="tb_trap_30d"></tbody></table></div></div>
+                <div><div class="sub-header">Static Blocks</div><div class="table-container"><table><thead><tr><th style="width:60px">Cnt</th><th>Source</th><th>Info</th></tr></thead><tbody id="tb_other_30d"></tbody></table></div></div>
+                <div><div class="sub-header">Top Active Subnets</div><div class="table-container"><table><thead><tr><th style="width:60px">Cnt</th><th>Subnet</th><th>Info</th></tr></thead><tbody id="tb_nets_30d"></tbody></table></div></div>
+            </div>
+            <div class="triple-grid" style="margin-top:20px;">
+                <div><div class="sub-header">Global Targeted Ports</div><div class="table-container"><table><thead><tr><th style="width:60px">Port</th><th>Top Attackers</th><th class="num" style="width:60px">Hits</th></tr></thead><tbody id="tb_ports_30d"></tbody></table></div></div>
+                <div><div class="sub-header">Honeypot/Brute Ports</div><div class="table-container"><table><thead><tr><th style="width:60px">Port</th><th>Top Attackers</th><th class="num" style="width:60px">Hits</th></tr></thead><tbody id="tb_brute_30d"></tbody></table></div></div>
+                <div><div class="sub-header">IPv6 Top Hitters</div><div class="table-container"><table><thead><tr><th style="width:60px">Cnt</th><th>Source</th><th>Info</th></tr></thead><tbody id="tb_ipv6_30d"></tbody></table></div></div>
+            </div>
+        </div>
+
+        <div id="tab_1y" class="tab-content">
+            <div class="triple-grid">
+                <div><div class="sub-header">Honeypot Victims</div><div class="table-container"><table><thead><tr><th style="width:60px">Cnt</th><th>Source</th><th>Info</th></tr></thead><tbody id="tb_trap_1y"></tbody></table></div></div>
+                <div><div class="sub-header">Static Blocks</div><div class="table-container"><table><thead><tr><th style="width:60px">Cnt</th><th>Source</th><th>Info</th></tr></thead><tbody id="tb_other_1y"></tbody></table></div></div>
+                <div><div class="sub-header">Top Active Subnets</div><div class="table-container"><table><thead><tr><th style="width:60px">Cnt</th><th>Subnet</th><th>Info</th></tr></thead><tbody id="tb_nets_1y"></tbody></table></div></div>
+            </div>
+            <div class="triple-grid" style="margin-top:20px;">
+                <div><div class="sub-header">Global Targeted Ports</div><div class="table-container"><table><thead><tr><th style="width:60px">Port</th><th>Top Attackers</th><th class="num" style="width:60px">Hits</th></tr></thead><tbody id="tb_ports_1y"></tbody></table></div></div>
+                <div><div class="sub-header">Honeypot/Brute Ports</div><div class="table-container"><table><thead><tr><th style="width:60px">Port</th><th>Top Attackers</th><th class="num" style="width:60px">Hits</th></tr></thead><tbody id="tb_brute_1y"></tbody></table></div></div>
+                <div><div class="sub-header">IPv6 Top Hitters</div><div class="table-container"><table><thead><tr><th style="width:60px">Cnt</th><th>Source</th><th>Info</th></tr></thead><tbody id="tb_ipv6_1y"></tbody></table></div></div>
+            </div>
+        </div>
+
+        <div id="tab_all" class="tab-content">
+            <div class="triple-grid">
+                <div><div class="sub-header">Honeypot Victims</div><div class="table-container"><table><thead><tr><th style="width:60px">Cnt</th><th>Source</th><th>Info</th></tr></thead><tbody id="tb_trap_all"></tbody></table></div></div>
+                <div><div class="sub-header">Static Blocks</div><div class="table-container"><table><thead><tr><th style="width:60px">Cnt</th><th>Source</th><th>Info</th></tr></thead><tbody id="tb_other_all"></tbody></table></div></div>
+                <div><div class="sub-header">Top Active Subnets</div><div class="table-container"><table><thead><tr><th style="width:60px">Cnt</th><th>Subnet</th><th>Info</th></tr></thead><tbody id="tb_nets_all"></tbody></table></div></div>
+            </div>
+            <div class="triple-grid" style="margin-top:20px;">
+                <div><div class="sub-header">Global Targeted Ports</div><div class="table-container"><table><thead><tr><th style="width:60px">Port</th><th>Top Attackers</th><th class="num" style="width:60px">Hits</th></tr></thead><tbody id="tb_ports_all"></tbody></table></div></div>
+                <div><div class="sub-header">Honeypot/Brute Ports</div><div class="table-container"><table><thead><tr><th style="width:60px">Port</th><th>Top Attackers</th><th class="num" style="width:60px">Hits</th></tr></thead><tbody id="tb_brute_all"></tbody></table></div></div>
+                <div><div class="sub-header">IPv6 Top Hitters</div><div class="table-container"><table><thead><tr><th style="width:60px">Cnt</th><th>Source</th><th>Info</th></tr></thead><tbody id="tb_ipv6_all"></tbody></table></div></div>
+            </div>
+        </div>
+    </div>
+
+    <div id="view_history" class="view-section">
+        <div class="tables-grid">
+            <div><div class="section-title"><span>Hourly (Last 24h)<span class="avg-badge" id="avg_hourly"></span></span></div><div class="table-container"><table><thead><tr><th>Hour</th><th class="num">IPv4</th><th class="num col-v6">IPv6</th><th class="num">VPN</th><th class="num">Trap</th><th class="num">Tot</th></tr></thead><tbody id="tb_hourly"></tbody></table></div></div>
+            <div><div class="section-title"><span>Daily (Last 30 Days)<span class="avg-badge" id="avg_daily"></span></span></div><div class="table-container"><table><thead><tr><th>Date</th><th class="num">IPv4</th><th class="num col-v6">IPv6</th><th class="num">VPN</th><th class="num">Trap</th><th class="num">Tot</th></tr></thead><tbody id="tb_daily"></tbody></table></div></div>
+        </div>
+        <div class="tables-grid">
+            <div><div class="section-title"><span>Monthly (Last 12 Months)<span class="avg-badge" id="avg_monthly"></span></span></div><div class="table-container"><table><thead><tr><th>Month</th><th class="num">IPv4</th><th class="num col-v6">IPv6</th><th class="num">VPN</th><th class="num">Trap</th><th class="num">Tot</th></tr></thead><tbody id="tb_monthly"></tbody></table></div></div>
+            <div><div class="section-title"><span>Yearly History<span class="avg-badge" id="avg_yearly"></span></span></div><div class="table-container"><table><thead><tr><th>Year</th><th class="num">IPv4</th><th class="num col-v6">IPv6</th><th class="num">VPN</th><th class="num">Trap</th><th class="num">Tot</th></tr></thead><tbody id="tb_yearly"></tbody></table></div></div>
+        </div>
+        <div class="tables-grid">
+            <div style="grid-column: 1 / -1;"><div class="section-title"><span>🏆 Top 10 Days by Volume (All Time)</span></div><div class="table-container"><table><thead><tr><th>Date</th><th class="num">IPv4</th><th class="num col-v6">IPv6</th><th class="num">VPN</th><th class="num">Trap</th><th class="num">Total</th></tr></thead><tbody id="tb_top_days"></tbody></table></div></div>
+        </div>
+    </div>
+
+    <div id="ipModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 class="modal-title" id="modalTitle">Attackers on Port </h3>
+                <span class="close" onclick="closeModal()">&times;</span>
+            </div>
+            <div class="ip-list-container" id="modalBody"></div>
+            <div class="modal-actions">
+                <button class="btn-action" onclick="copyIPList()">📋 Copy List</button>
+                <button class="btn-action" onclick="downloadIPList()">⬇️ Download List (.txt)</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="footer">Uptime: <span id="uptime">-</span></div>
+    
+    <script>
+        function showMainTab(id) {
+            document.querySelectorAll('.view-section').forEach(e => e.classList.remove('active'));
+            document.querySelectorAll('.main-tab-btn').forEach(e => e.classList.remove('active'));
+            document.getElementById('view_'+id).classList.add('active'); event.target.classList.add('active');
+        }
+        function showTab(id) { 
+            document.querySelectorAll('.tab-content').forEach(e => e.classList.remove('active')); 
+            document.querySelectorAll('.tab-btn').forEach(e => e.classList.remove('active')); 
+            document.getElementById('tab_'+id).classList.add('active'); event.target.classList.add('active'); 
+        }
+
+        /* MODAL LOGIC (UPDATED FOR TEXT FILES) */
+        let currentModalPort = "";
+
+        window.loadList = function(filename, port) {
+            currentModalPort = port;
+            document.getElementById("modalTitle").innerText = "Loading...";
+            document.getElementById("ipModal").style.display = "block";
+            
+            fetch('lists/' + filename)
+                .then(response => {
+                    if (!response.ok) throw new Error("List not found");
+                    return response.text();
+                })
+                .then(text => {
+                    document.getElementById("modalTitle").innerText = "Attackers on Port " + port;
+                    document.getElementById("modalBody").innerText = text;
+                })
+                .catch(err => {
+                    document.getElementById("modalBody").innerText = "Error loading list: " + err.message;
+                });
+        };
+        
+        function closeModal() {
+            document.getElementById("ipModal").style.display = "none";
+        }
+        
+        function copyIPList() {
+            const text = document.getElementById("modalBody").innerText;
+            navigator.clipboard.writeText(text).then(() => {
+                alert("IPs copied to clipboard!");
+            }).catch(err => {
+                console.error('Failed to copy: ', err);
+            });
+        }
+
+        function downloadIPList() {
+            const text = document.getElementById("modalBody").innerText;
+            const blob = new Blob([text], { type: 'text/plain' });
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = "attackers_port_" + currentModalPort + ".txt";
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            window.URL.revokeObjectURL(url);
+        }
+
+        window.onclick = function(event) {
+            const modal = document.getElementById("ipModal");
+            if (event.target == modal) { modal.style.display = "none"; }
+        }
+        
+        window.loadList = loadList;
+
+        let refreshIntervalId = null;
+        async function fetchStats() {
+            const dot = document.getElementById('loading_dot'); dot.classList.add('active');
+            try {
+                const response = await fetch('firewall_data.js?t=' + Date.now());
+                if (!response.ok) throw new Error("Net Error");
+                const text = await response.text();
+                window.eval(text); renderDashboard();
+            } catch (error) { console.error("Fetch error:", error); }
+            setTimeout(() => dot.classList.remove('active'), 500);
+        }
+
+        function renderDashboard() {
+            if (typeof window.FW_DATA !== 'undefined') {
+                const d = window.FW_DATA;
+                const setDiff = (elId, val) => { const el = document.getElementById(elId); if(!val || val==='0' || val==='=0' || val==='+0' || val==='-0'){ el.innerHTML=`<span class="diff eq">-</span>`; } else if(val.includes('+')){ el.innerHTML=`<span class="diff pos">${val}</span>`; } else if(val.includes('-')){ el.innerHTML=`<span class="diff neg">${val}</span>`; } else { el.innerHTML=`<span class="diff eq">-</span>`; } };
+                
+                document.getElementById('size_main').innerText = d.lists.main; setDiff('diff_v4', d.lists.diff_v4);
+                document.getElementById('size_main6').innerText = d.lists.main6; setDiff('diff_v6', d.lists.diff_v6);
+                document.getElementById('size_vpn').innerText = d.lists.vpn; setDiff('diff_vpn', d.lists.diff_vpn);
+                
+                const t4 = parseInt(d.lists.trap_ips) || 0;
+                const t6 = parseInt(d.lists.trap6_ips) || 0;
+                document.getElementById('size_trap_total').innerText = (t4 + t6);
+                document.getElementById('size_trap').innerText = t4;
+                document.getElementById('size_trap6').innerText = t6;
+                setDiff('diff_trap', d.lists.diff_trap);
+                setDiff('diff_trap6', d.lists.diff_trap6);
+                
+                document.getElementById('lifetime').innerText = d.lifetime; document.getElementById('uptime').innerText = d.uptime; document.getElementById('last_update_header').innerText = d.updated;
+                
+                document.getElementById('tb_top_days').innerHTML = d.tables.top_days;
+                document.getElementById('tb_hourly').innerHTML = d.tables.hourly; document.getElementById('tb_daily').innerHTML = d.tables.daily;
+                document.getElementById('tb_monthly').innerHTML = d.tables.monthly; document.getElementById('tb_yearly').innerHTML = d.tables.yearly;
+                
+                if(d.averages) {
+                    document.getElementById('avg_hourly').innerText = "Avg: " + d.averages.hourly; document.getElementById('avg_daily').innerText = "Avg: " + d.averages.daily;
+                    document.getElementById('avg_monthly').innerText = "Avg: " + d.averages.monthly; document.getElementById('avg_yearly').innerText = "Avg: " + d.averages.yearly;
+                }
+                
+                ['24h','30d','1y','all'].forEach(p => {
+                    document.getElementById('tb_trap_'+p).innerHTML = d.tables['trap_'+p];
+                    document.getElementById('tb_other_'+p).innerHTML = d.tables['other_'+p];
+                    document.getElementById('tb_nets_'+p).innerHTML = d.tables['nets_'+p];
+                    document.getElementById('tb_ipv6_'+p).innerHTML = d.tables['ipv6_'+p]; // [NEW] IPv6 Table Render
+                    if(d.tables['ports_'+p]) document.getElementById('tb_ports_'+p).innerHTML = d.tables['ports_'+p];
+                    if(d.tables['brute_'+p]) document.getElementById('tb_brute_'+p).innerHTML = d.tables['brute_'+p];
+                });
+                
+                if (d.ipv6_status === "false") {
+                    if(document.getElementById('card_v6')) document.getElementById('card_v6').style.display = 'none';
+                    document.querySelectorAll('.col-v6').forEach(el => el.style.display = 'none');
+                }
+            }
+        }
+
+        function changeRefreshRate(val) {
+            localStorage.setItem('fw_stats_refresh_rate', val);
+            if (refreshIntervalId) clearInterval(refreshIntervalId);
+            if (val > 0) { refreshIntervalId = setInterval(fetchStats, parseInt(val)); }
+        }
+
+        window.onload = function() {
+            fetchStats();
+            const savedRate = localStorage.getItem('fw_stats_refresh_rate') || "0";
+            document.getElementById('refresh_timer').value = savedRate;
+            changeRefreshRate(savedRate);
+        };
+    </script>
+</body>
+</html>
