@@ -1,14 +1,15 @@
 #!/bin/sh
 
 # ==============================================================================
-# KEENETIC FIREWALL STATS v3.4.21 (FINAL)
+# KEENETIC FIREWALL STATS v3.4.22 (HOTFIX)
 # ==============================================================================
 # AUTHOR: mattheweli
 # DESCRIPTION: 
 #   Aggregates firewall statistics, parses sniffer data for port mapping,
 #   and generates JSON data for the web dashboard.
 #   
-#   CHANGES IN v3.4.21:
+#   CHANGES IN v3.4.22:
+#     - FIX: Database migration process fixed
 #     - LOGIC: Sniffer execution moved BEFORE JSON generation for real-time updates.
 #     - CORE: Implemented robust "Linux Cooked" (SLL) header parsing for tcpdump.
 # ==============================================================================
@@ -88,7 +89,7 @@ NOW=$($DATE_CMD +%s)
 NEW_DROPS_V4=0; NEW_DROPS_V6=0; NEW_DROPS_VPN=0; NEW_DROPS_TRAP=0; NEW_DROPS_TRAP6=0
 NEW_IP_RECORDS=0
 
-echo "=== Firewall Stats Updater v3.4.21 ==="
+echo "=== Firewall Stats Updater v3.4.22 ==="
 
 # ==============================================================================
 # 3. DATABASE INITIALIZATION
@@ -102,14 +103,24 @@ if [ ! -f "$DB_FILE" ]; then
     # Table: ip_info (Geo-data, Risk Score, Domain)
     sqlite3 "$DB_FILE" "CREATE TABLE ip_info (ip TEXT PRIMARY KEY, country TEXT, risk INTEGER, domain TEXT, updated INTEGER, target_port INTEGER, port_history TEXT);"
 else
-    # Migration Check: Add target_port column if missing
+    # --- MIGRATION CHECKS ---
+    
+    # 1. Check ip_drops for 'list_type' (CRITICAL FIX)
+    HAS_LIST=$(sqlite3 "$DB_FILE" "PRAGMA table_info(ip_drops);" | grep list_type)
+    if [ -z "$HAS_LIST" ]; then
+        echo " -> Migrating DB: Adding list_type column to ip_drops..."
+        sqlite3 "$DB_FILE" "ALTER TABLE ip_drops ADD COLUMN list_type TEXT;"
+        sqlite3 "$DB_FILE" "CREATE INDEX IF NOT EXISTS idx_list ON ip_drops(list_type);"
+    fi
+
+    # 2. Check ip_info for 'target_port'
     HAS_COL=$(sqlite3 "$DB_FILE" "PRAGMA table_info(ip_info);" | grep target_port)
     if [ -z "$HAS_COL" ]; then
         echo " -> Migrating DB: Adding target_port column..."
         sqlite3 "$DB_FILE" "ALTER TABLE ip_info ADD COLUMN target_port INTEGER;"
     fi
     
-    # Migration Check: Add port_history column if missing
+    # 3. Check ip_info for 'port_history'
     HAS_HIST=$(sqlite3 "$DB_FILE" "PRAGMA table_info(ip_info);" | grep port_history)
     if [ -z "$HAS_HIST" ]; then
         echo " -> Migrating DB: Adding port_history column..."
