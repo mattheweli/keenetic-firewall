@@ -1,14 +1,17 @@
 #!/bin/sh
 
 # ==============================================================================
-# KEENETIC FIREWALL STATS v3.4.22 (HOTFIX)
+# KEENETIC FIREWALL STATS v3.4.24 (STRICT PROTOCOL)
 # ==============================================================================
 # AUTHOR: mattheweli
 # DESCRIPTION: 
 #   Aggregates firewall statistics, parses sniffer data for port mapping,
 #   and generates JSON data for the web dashboard.
 #   
-#   CHANGES IN v3.4.22:
+#   CHANGES IN v3.4.24:
+#     - OPT: Limited tooltip port list in JS to max 20 entries to reduce file size.
+#     - LOGIC: Honeypot tables now strictly enforce TCP/UDP protocol matching
+#       based on firewall_manager configuration
 #     - FIX: Database migration process fixed
 #     - LOGIC: Sniffer execution moved BEFORE JSON generation for real-time updates.
 #     - CORE: Implemented robust "Linux Cooked" (SLL) header parsing for tcpdump.
@@ -89,7 +92,7 @@ NOW=$($DATE_CMD +%s)
 NEW_DROPS_V4=0; NEW_DROPS_V6=0; NEW_DROPS_VPN=0; NEW_DROPS_TRAP=0; NEW_DROPS_TRAP6=0
 NEW_IP_RECORDS=0
 
-echo "=== Firewall Stats Updater v3.4.22 ==="
+echo "=== Firewall Stats Updater v3.4.24 ==="
 
 # ==============================================================================
 # 3. DATABASE INITIALIZATION
@@ -442,9 +445,18 @@ get_ip_table() {
                 CTR=$((CTR+1))
             done
             if [ "$P_COUNT" -gt "$LIMIT" ]; then 
-                REM=$((P_COUNT - LIMIT))
-                START_CUT=$((LIMIT + 1))
-                HIDDEN_LIST=$(echo "$PHIST_SPACE" | cut -d' ' -f${START_CUT}- | sed 's/ /, /g')
+                REM=$((P_COUNT - LIMIT)); START_CUT=$((LIMIT + 1))
+                
+                # OPTIMIZATION: Limit tooltip length to Avoid JS bloat
+                MAX_TT=100
+                if [ "$REM" -gt "$MAX_TT" ]; then
+                    END_CUT=$((LIMIT + MAX_TT))
+                    HIDDEN_LIST=$(echo "$PHIST_SPACE" | cut -d' ' -f${START_CUT}-${END_CUT} | sed 's/ /, /g')
+                    HIDDEN_LIST="${HIDDEN_LIST}, ..."
+                else
+                    HIDDEN_LIST=$(echo "$PHIST_SPACE" | cut -d' ' -f${START_CUT}- | sed 's/ /, /g')
+                fi
+                
                 PORT_HTML="${PORT_HTML}<span class='list-badge' style='${STYLE_MORE}' title='Other ports: $HIDDEN_LIST'>(+$REM)</span>"
             fi
         elif [ -n "$PORT" ] && [ "$PORT" != "0" ]; then
@@ -517,12 +529,35 @@ PORTS_30D=$(get_port_stats 2592000 "" "p30")
 PORTS_1Y=$(get_port_stats 31536000 "" "p1y")
 PORTS_ALL=$(get_port_stats "" "" "pall")
 
-# Bruteforce Tables (Trap Ports Only)
-if [ -n "$TRAP_SQL_LIST" ]; then
-    TRAP_PORT_FILTER="AND d.list_type='trap' AND i.target_port IN ($TRAP_SQL_LIST)"
-else
-    TRAP_PORT_FILTER="AND d.list_type='trap'"
+# Bruteforce Tables (Strict Protocol Filtering)
+TCP_CSV=$(echo "$TCP_SERVICES" | tr -s ' ' ',' | sed 's/^,//;s/,$//')
+UDP_CSV=$(echo "$UDP_SERVICES" | tr -s ' ' ',' | sed 's/^,//;s/,$//')
+
+CLAUSE_TCP=""
+if [ -n "$TCP_CSV" ]; then
+    # Match se la porta è nella lista TCP E se la storia contiene "/tcp" associato a quella porta
+    CLAUSE_TCP="(i.target_port IN ($TCP_CSV) AND i.port_history LIKE '%' || i.target_port || '/tcp%')"
 fi
+
+CLAUSE_UDP=""
+if [ -n "$UDP_CSV" ]; then
+    # Match se la porta è nella lista UDP E se la storia contiene "/udp" associato a quella porta
+    CLAUSE_UDP="(i.target_port IN ($UDP_CSV) AND i.port_history LIKE '%' || i.target_port || '/udp%')"
+fi
+
+FULL_CLAUSE=""
+if [ -n "$CLAUSE_TCP" ] && [ -n "$CLAUSE_UDP" ]; then
+    FULL_CLAUSE="AND ($CLAUSE_TCP OR $CLAUSE_UDP)"
+elif [ -n "$CLAUSE_TCP" ]; then
+    FULL_CLAUSE="AND $CLAUSE_TCP"
+elif [ -n "$CLAUSE_UDP" ]; then
+    FULL_CLAUSE="AND $CLAUSE_UDP"
+else
+    FULL_CLAUSE="AND 0" # Nessun servizio definito, nessuna tabella brute force
+fi
+
+TRAP_PORT_FILTER="AND d.list_type='trap' $FULL_CLAUSE"
+
 BRUTE_24H=$(get_port_stats 86400 "$TRAP_PORT_FILTER" "b24")
 BRUTE_30D=$(get_port_stats 2592000 "$TRAP_PORT_FILTER" "b30")
 BRUTE_1Y=$(get_port_stats 31536000 "$TRAP_PORT_FILTER" "b1y")
