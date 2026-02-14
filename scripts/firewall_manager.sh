@@ -25,9 +25,9 @@ KEY_FILE="/opt/etc/AbuseIPDB.key"
 DEF_IPV6="true"
 DEF_FWD_PROT="false" # Default OFF
 DEF_BAN_TIME="86400" # 24 Hours
-DEF_TCP="80 443"
-DEF_UDP=""
-DEF_PASSIVE=""
+DEF_TCP="447 51515 55422 11872 2121"
+DEF_UDP="16257 51515 33252"
+DEF_PASSIVE="55536:55541"
 DEF_BF_SEC="60"
 DEF_BF_HIT="5"
 DEF_REP_COOL="604800" # 7 Days
@@ -144,7 +144,7 @@ do_whitelist_menu() {
         echo -e "${DIM}Domains are resolved to IPs when you click 'Apply'.${NC}\n"
         
         if [ -s "$WHITELIST_FILE" ]; then
-            nl -w2 -s") " "$WHITELIST_FILE"
+            awk '{print NR")", $0}' "$WHITELIST_FILE"
         else
             echo -e "${DIM}(Whitelist is empty)${NC}"
         fi
