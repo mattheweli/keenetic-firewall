@@ -1,14 +1,15 @@
 #!/bin/sh
 
 # ==============================================================================
-# KEENETIC FIREWALL STATS v3.4.24 (STRICT PROTOCOL)
+# KEENETIC FIREWALL STATS v3.4.25 (STRICT PROTOCOL)
 # ==============================================================================
 # AUTHOR: mattheweli
 # DESCRIPTION: 
 #   Aggregates firewall statistics, parses sniffer data for port mapping,
 #   and generates JSON data for the web dashboard.
 #   
-#   CHANGES IN v3.4.24:
+#   CHANGES IN v3.4.25:
+#     - FIX: WAN sniffer process optimized
 #     - OPT: Limited tooltip port list in JS to max 20 entries to reduce file size.
 #     - LOGIC: Honeypot tables now strictly enforce TCP/UDP protocol matching
 #       based on firewall_manager configuration
@@ -92,7 +93,7 @@ NOW=$($DATE_CMD +%s)
 NEW_DROPS_V4=0; NEW_DROPS_V6=0; NEW_DROPS_VPN=0; NEW_DROPS_TRAP=0; NEW_DROPS_TRAP6=0
 NEW_IP_RECORDS=0
 
-echo "=== Firewall Stats Updater v3.4.24 ==="
+echo "=== Firewall Stats Updater v3.4.25 ==="
 
 # ==============================================================================
 # 3. DATABASE INITIALIZATION
@@ -271,117 +272,125 @@ fi
 rm "$CURRENT_DUMP" "$SQL_IMPORT" 2>/dev/null
 
 # ==============================================================================
-# 8. SNIFFER PARSER (MOVED UP FOR REAL-TIME UPDATES)
+# 8. SNIFFER PARSER (OPTIMIZED: DEDUP-FIRST STRATEGY)
 # ==============================================================================
 PCAP_BASE="/tmp/fw_syn_ring.pcap"
 DB_CACHE="/tmp/fw_db_cache.dat"
+UNIQUE_TRAFFIC="/tmp/fw_unique_traffic.dat"
 LOG_BUFFER=$(ls ${PCAP_BASE}* 2>/dev/null | head -n 1)
 
 if [ -n "$LOG_BUFFER" ] && [ -s "$LOG_BUFFER" ]; then
     echo " -> 🕵️ Processing WAN Sniffer Buffer..."
     
-    # 1. Load DB Cache into RAM
-    # Format: IP|HISTORY
+    # 1. Dump DB Cache (IP | Existing_History)
+    # Stiamo leggendo solo le colonne necessarie per velocizzare
     sqlite3 -separator "|" "$DB_FILE" "SELECT d.ip, IFNULL(i.port_history, '') FROM ip_drops d LEFT JOIN ip_info i ON d.ip=i.ip GROUP BY d.ip;" > "$DB_CACHE"
-    
     BLOCKED_COUNT=$(wc -l < "$DB_CACHE")
-    echo "    [DEBUG] Loaded $BLOCKED_COUNT blocked IPs from DB."
 
-    echo "BEGIN TRANSACTION;" > /tmp/port_update.sql
-    
-    # 2. Parse Sniffer + Cross-reference Data
-    # NOTE: Removed -F"|" to allow proper parsing of tcpdump spaces
-    tcpdump -r "$LOG_BUFFER" -nn 2>/dev/null | awk -v now="$NOW" '
-    # --- PHASE 1: Read DB Cache (File 1) ---
-    FNR==NR {
-        # Manual split of DB line using | as separator
-        split($0, parts, "|");
-        db_ip = parts[1];
-        db_hist = parts[2];
-        
-        hist[db_ip] = db_hist;
-        is_blocked[db_ip] = 1;
-        next;
-    }
-    
-    # --- PHASE 2: Read Sniffer (File 2) ---
+    # 2. PHASE 1: Parse PCAP & Deduplicate (The Speed Boost)
+    # Invece di incrociare i dati subito, estraiamo solo IP/PORTA/PROTO e usiamo 'sort -u'
+    # Questo collassa 1000 pacchetti di scan in 1 singola riga da elaborare.
+    tcpdump -r "$LOG_BUFFER" -nn 2>/dev/null | awk '
     {
-        # Find the ">" arrow using default separator (space)
+        # Robust Arrow Detection (SLL/Ethernet safe)
         arrow_idx = 0;
         for (i=1; i<=NF; i++) { if ($i == ">") { arrow_idx = i; break; } }
         
         if (arrow_idx > 0) {
-            # Example: IP 1.2.3.4.12345 > 5.6.7.8.80: ...
             src_full = $(arrow_idx-1);
             dst_full = $(arrow_idx+1);
             
-            # --- SOURCE IP PARSING ---
-            # Take first 4 octets (IPv4) or clean IPv6
+            # Extract IP
             n = split(src_full, a, ".");
-            ip = "";
-            if (n >= 5) { 
-                ip = a[1]"."a[2]"."a[3]"."a[4];
-            } 
-            else if (n == 2) {
-                ip = src_full; sub(/\.[^.]*$/, "", ip);
-            }
-            else {
-                ip = src_full; 
-                if (src_full ~ /\.[0-9]+$/) sub(/\.[^.]*$/, "", ip);
-            }
+            if (n >= 5) ip = a[1]"."a[2]"."a[3]"."a[4];
+            else if (n == 2) { ip = src_full; sub(/\.[^.]*$/, "", ip); }
+            else { ip = src_full; if (src_full ~ /\.[0-9]+$/) sub(/\.[^.]*$/, "", ip); }
 
-            # --- DESTINATION PORT PARSING ---
+            # Extract Port
             m = split(dst_full, b, ".");
             port_str = b[m];
-            # Clean trailing colons (e.g. "80:")
             gsub(":", "", port_str);
 
-            # Protocol Detection
+            # Extract Proto
             proto = "udp"; 
             if ($0 ~ /Flags/ || $0 ~ /seq/ || $0 ~ /ack/) { proto = "tcp" }
 
-            # --- VERIFICATION AND UPDATE ---
-            if (length(ip) >= 7 && port_str + 0 > 0 && (ip in is_blocked)) {
+            # Print raw tuple for deduplication
+            if (length(ip) >= 7 && port_str + 0 > 0) {
+                print ip "|" port_str "|" proto
+            }
+        }
+    }' | sort -u > "$UNIQUE_TRAFFIC"
+
+    TRAFFIC_COUNT=$(wc -l < "$UNIQUE_TRAFFIC")
+    echo "    [DEBUG] Condensed traffic into $TRAFFIC_COUNT unique flows."
+
+    # 3. PHASE 2: Cross-Reference & Generate SQL
+    # Ora carichiamo in AWK solo le poche righe di traffico unico (molto veloce)
+    # e le confrontiamo con il DB (streaming).
+    
+    echo "BEGIN TRANSACTION;" > /tmp/port_update.sql
+    
+    awk -F"|" -v now="$NOW" '
+    FNR==NR {
+        # FILE 1: Unique Traffic (Small) -> Load into RAM
+        # arr[IP] = "port/proto,port/proto..."
+        key = $1
+        val = $2 "/" $3
+        if (traffic[key] == "") { traffic[key] = val } 
+        else { traffic[key] = traffic[key] "," val }
+        next
+    }
+    {
+        # FILE 2: DB Cache (Large) -> Stream Process
+        # $1 = IP, $2 = Current History
+        db_ip = $1
+        db_hist = $2
+        
+        if (db_ip in traffic) {
+            # Hit! The blocked IP was found in the sniffer logs
+            new_entries = traffic[db_ip]
+            split(new_entries, candidates, ",")
+            
+            is_modified = 0
+            final_hist = db_hist
+            last_port = 0
+            
+            for (i in candidates) {
+                cand = candidates[i]
+                split(cand, p, "/") # p[1]=port
                 
-                new_entry = port_str "/" proto;
-                current = hist[ip];
-                
-                # Smart Deduplication
-                is_new = 1;
-                if (current != "") {
-                    split(current, items, ",");
-                    for (ix in items) {
-                        split(items[ix], parts, "/");
-                        if (parts[1] == port_str) { is_new = 0; break; }
-                    }
+                # Check for duplicate in existing history
+                if (index(final_hist, cand) == 0) {
+                    if (final_hist == "") { final_hist = cand }
+                    else { final_hist = final_hist "," cand }
+                    is_modified = 1
+                    last_port = p[1]
+                } else {
+                    # Even if present, update timestamp/last_port
+                    last_port = p[1]
+                    is_modified = 1 
                 }
-                
-                if (is_new) {
-                    if (current == "") {
-                        new_hist = new_entry;
-                        printf "INSERT OR IGNORE INTO ip_info (ip, updated, port_history) VALUES (\047%s\047, %d, \047%s\047);\n", ip, now, new_hist;
-                    } else {
-                        new_hist = current "," new_entry;
-                    }
-                    hist[ip] = new_hist;
-                    printf "UPDATE ip_info SET target_port=%s, port_history=\047%s\047, updated=%d WHERE ip=\047%s\047;\n", port_str, new_hist, now, ip;
-                    count++;
-                }
+            }
+            
+            if (is_modified) {
+                printf "UPDATE ip_info SET target_port=%s, port_history=\047%s\047, updated=%d WHERE ip=\047%s\047;\n", last_port, final_hist, now, db_ip;
+                updates++
             }
         }
     }
     END { 
-        print "    [DEBUG] Generated " (count+0) " updates based on traffic analysis." > "/dev/stderr"; 
+        print "    [DEBUG] Matched & Updated " (updates+0) " records." > "/dev/stderr"; 
     }
-    ' "$DB_CACHE" - >> /tmp/port_update.sql
+    ' "$UNIQUE_TRAFFIC" "$DB_CACHE" >> /tmp/port_update.sql
     
     echo "COMMIT;" >> /tmp/port_update.sql
 
-    # 3. Execute SQL transaction
+    # 4. Execute
     sqlite3 "$DB_FILE" < /tmp/port_update.sql
     
     # Cleanup
-    rm "/tmp/port_update.sql" "$DB_CACHE" 2>/dev/null
+    rm "/tmp/port_update.sql" "$DB_CACHE" "$UNIQUE_TRAFFIC" 2>/dev/null
 else
     echo " -> 🕵️ Buffer empty or missing."
 fi
