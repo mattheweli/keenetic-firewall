@@ -1,9 +1,10 @@
 #!/bin/sh
 
 # ==============================================================================
-# KEENETIC FIREWALL HOOK v2.5.1 (ULOGD / NFLOG EDITION)
+# KEENETIC FIREWALL HOOK v2.6.0 (MODULAR TRAP)
 # Description: Dual-Stack Firewall with Auto-Ban, Connlimit & Port Logging.
 # Features:
+#   - MODULAR: Conditionally loads Connlimit, BruteForce, and AutoBan rules.
 #   - PERSISTENCE: Restores AutoBan lists from disk on startup/restart.
 #   - WHITELIST: High-priority IPSet for trusted IPs/Subnets.
 #   - XT_RECENT: Anti-BruteForce protection (Configurable).
@@ -46,8 +47,13 @@ CONF_FILE="/opt/etc/firewall.conf"
 if [ -f "$CONF_FILE" ]; then 
     . "$CONF_FILE"
 else 
+    # Fallback Defaults
     ENABLE_IPV6="true"
     ENABLE_FWD_PROTECTION="false"
+    ENABLE_AUTOBAN="true"
+    ENABLE_BRUTEFORCE="true"
+    ENABLE_CONNLIMIT="true"
+    CONNLIMIT_MAX="15"
     TCP_SERVICES="51515 21"
     UDP_SERVICES=""
     TCP_PASSIVE_RANGE=""
@@ -57,7 +63,13 @@ else
 fi
 
 # Fallback defaults if config file exists but variable is missing
+: ${ENABLE_AUTOBAN:="true"}
+: ${ENABLE_BRUTEFORCE:="true"}
+: ${ENABLE_CONNLIMIT:="true"}
+: ${CONNLIMIT_MAX:="15"}
 : ${ENABLE_FWD_PROTECTION:="false"}
+: ${BF_SECONDS:="60"}
+: ${BF_HITCOUNT:="5"}
 
 # Settings
 IPSET_MAIN="FirewallBlock"; IPSET_MAIN6="FirewallBlock6"
@@ -68,10 +80,6 @@ IPSET_WHITE="FirewallWhite"; IPSET_WHITE6="FirewallWhite6"
 VPN_BANNED_FILE="/opt/etc/vpn_banned_ips.txt"
 AUTOBAN_SAVE_FILE="/opt/etc/firewall_autoban.save"
 MAX_ELEM_V4=524288; MAX_ELEM_V6=65536
-
-# BRUTE FORCE SETTINGS (Sanity Checks)
-: ${BF_SECONDS:="60"}
-: ${BF_HITCOUNT:="5"}
 
 # --- HELPER: CONVERT SPACE TO COMMA ---
 to_csv() { echo "$1" | tr ' ' ','; }
@@ -169,13 +177,7 @@ if ipset list -n "$IPSET_WHITE" >/dev/null 2>&1; then
     iptables -A BLOCKLIST_FWD -m set --match-set "$IPSET_WHITE" src -j RETURN
 fi
 
-# --- BLACKLISTS (INPUT & FORWARD) ---
-if ipset list -n "$IPSET_AUTOBAN" >/dev/null 2>&1; then
-    iptables -A BLOCKLIST_IN -m set --match-set "$IPSET_AUTOBAN" src -j NFLOG --nflog-group 1 --nflog-range 128 --nflog-prefix "FW_DROP"
-    iptables -A BLOCKLIST_IN -m set --match-set "$IPSET_AUTOBAN" src -j DROP
-    iptables -A BLOCKLIST_FWD -m set --match-set "$IPSET_AUTOBAN" src -j NFLOG --nflog-group 1 --nflog-range 128 --nflog-prefix "FW_DROP"
-    iptables -A BLOCKLIST_FWD -m set --match-set "$IPSET_AUTOBAN" src -j DROP
-fi
+# --- STATIC BLACKLISTS (INPUT & FORWARD) ---
 if ipset list -n "$IPSET_MAIN" >/dev/null 2>&1; then
     iptables -A BLOCKLIST_IN -m set --match-set "$IPSET_MAIN" src -j NFLOG --nflog-group 1 --nflog-range 128 --nflog-prefix "FW_DROP"
     iptables -A BLOCKLIST_IN -m set --match-set "$IPSET_MAIN" src -j DROP
@@ -187,6 +189,14 @@ if ipset list -n "$IPSET_VPN" >/dev/null 2>&1; then
     iptables -A BLOCKLIST_IN -m set --match-set "$IPSET_VPN" src -j DROP
     iptables -A BLOCKLIST_FWD -m set --match-set "$IPSET_VPN" src -j NFLOG --nflog-group 1 --nflog-range 128 --nflog-prefix "FW_DROP"
     iptables -A BLOCKLIST_FWD -m set --match-set "$IPSET_VPN" src -j DROP
+fi
+
+# --- DYNAMIC AUTOBAN BLOCK (Conditionally Active) ---
+if [ "$ENABLE_AUTOBAN" = "true" ] && ipset list -n "$IPSET_AUTOBAN" >/dev/null 2>&1; then
+    iptables -A BLOCKLIST_IN -m set --match-set "$IPSET_AUTOBAN" src -j NFLOG --nflog-group 1 --nflog-range 128 --nflog-prefix "FW_DROP"
+    iptables -A BLOCKLIST_IN -m set --match-set "$IPSET_AUTOBAN" src -j DROP
+    iptables -A BLOCKLIST_FWD -m set --match-set "$IPSET_AUTOBAN" src -j NFLOG --nflog-group 1 --nflog-range 128 --nflog-prefix "FW_DROP"
+    iptables -A BLOCKLIST_FWD -m set --match-set "$IPSET_AUTOBAN" src -j DROP
 fi
 
 # --- THE HONEYPOT TRAP (SCAN_TRAP) ---
@@ -205,22 +215,32 @@ if ipset list -n "$IPSET_WHITE" >/dev/null 2>&1; then
     iptables -A SCAN_TRAP -m set --match-set "$IPSET_WHITE" src -j RETURN
 fi
 
-# 2. TCP SERVICES
+# 2. TCP SERVICES (With Modular Protections)
 if [ -n "$TCP_PORTS_CSV" ]; then
-    iptables -A SCAN_TRAP -p tcp -m multiport --dports "$TCP_PORTS_CSV" \
-        -m connlimit --connlimit-above 15 -j DROP
+    
+    # MODULAR: ConnLimit (DDoS)
+    if [ "$ENABLE_CONNLIMIT" = "true" ]; then
+        iptables -A SCAN_TRAP -p tcp -m multiport --dports "$TCP_PORTS_CSV" \
+            -m connlimit --connlimit-above "$CONNLIMIT_MAX" -j DROP
+    fi
 
-    iptables -A SCAN_TRAP -p tcp -m multiport --dports "$TCP_PORTS_CSV" -m state --state NEW \
-        -m recent --update --seconds $BF_SECONDS --hitcount $BF_HITCOUNT --name BF_PROT --rsource \
-        -j SET --add-set "$IPSET_AUTOBAN" src 2>/dev/null
+    # MODULAR: BruteForce Protection
+    if [ "$ENABLE_BRUTEFORCE" = "true" ]; then
+        # Check if already over threshold -> Ban (conditionally) or Drop
+        iptables -A SCAN_TRAP -p tcp -m multiport --dports "$TCP_PORTS_CSV" -m state --state NEW \
+            -m recent --update --seconds $BF_SECONDS --hitcount $BF_HITCOUNT --name BF_PROT --rsource \
+            -j SET --add-set "$IPSET_AUTOBAN" src 2>/dev/null
 
-    iptables -A SCAN_TRAP -p tcp -m multiport --dports "$TCP_PORTS_CSV" -m state --state NEW \
-        -m recent --update --seconds $BF_SECONDS --hitcount $BF_HITCOUNT --name BF_PROT --rsource \
-        -j DROP
+        iptables -A SCAN_TRAP -p tcp -m multiport --dports "$TCP_PORTS_CSV" -m state --state NEW \
+            -m recent --update --seconds $BF_SECONDS --hitcount $BF_HITCOUNT --name BF_PROT --rsource \
+            -j DROP
 
-    iptables -A SCAN_TRAP -p tcp -m multiport --dports "$TCP_PORTS_CSV" -m state --state NEW \
-        -m recent --set --name BF_PROT --rsource
+        # Create new entry for tracking
+        iptables -A SCAN_TRAP -p tcp -m multiport --dports "$TCP_PORTS_CSV" -m state --state NEW \
+            -m recent --set --name BF_PROT --rsource
+    fi
 
+    # Allow if passed checks
     iptables -A SCAN_TRAP -p tcp -m multiport --dports "$TCP_PORTS_CSV" -j RETURN
 fi
 
@@ -240,7 +260,8 @@ if ipset list -n "$IPSET_MAIN" >/dev/null 2>&1; then
 fi
 
 # 6. THE HAMMER (Catch-All & Logger)
-if ipset list -n "$IPSET_AUTOBAN" >/dev/null 2>&1; then
+# Only add to AutoBan if enabled
+if [ "$ENABLE_AUTOBAN" = "true" ] && ipset list -n "$IPSET_AUTOBAN" >/dev/null 2>&1; then
     iptables -A SCAN_TRAP -m set ! --match-set "$IPSET_AUTOBAN" src -j SET --add-set "$IPSET_AUTOBAN" src 2>/dev/null
 fi
 
@@ -284,18 +305,20 @@ if [ "$ENABLE_IPV6" = "true" ]; then
         ip6tables -A BLOCKLIST_FWD6 -m set --match-set "$IPSET_WHITE6" src -j RETURN
     fi
 
-    # Blacklists
-    if ipset list -n "$IPSET_AUTOBAN6" >/dev/null 2>&1; then
-        ip6tables -A BLOCKLIST_IN6 -m set --match-set "$IPSET_AUTOBAN6" src -j NFLOG --nflog-group 1 --nflog-range 128 --nflog-prefix "FW_DROP6"
-        ip6tables -A BLOCKLIST_IN6 -m set --match-set "$IPSET_AUTOBAN6" src -j DROP
-        ip6tables -A BLOCKLIST_FWD6 -m set --match-set "$IPSET_AUTOBAN6" src -j NFLOG --nflog-group 1 --nflog-range 128 --nflog-prefix "FW_DROP6"
-        ip6tables -A BLOCKLIST_FWD6 -m set --match-set "$IPSET_AUTOBAN6" src -j DROP
-    fi
+    # Static Blacklists
     if ipset list -n "$IPSET_MAIN6" >/dev/null 2>&1; then
         ip6tables -A BLOCKLIST_IN6 -m set --match-set "$IPSET_MAIN6" src -j NFLOG --nflog-group 1 --nflog-range 128 --nflog-prefix "FW_DROP6"
         ip6tables -A BLOCKLIST_IN6 -m set --match-set "$IPSET_MAIN6" src -j DROP
         ip6tables -A BLOCKLIST_FWD6 -m set --match-set "$IPSET_MAIN6" src -j NFLOG --nflog-group 1 --nflog-range 128 --nflog-prefix "FW_DROP6"
         ip6tables -A BLOCKLIST_FWD6 -m set --match-set "$IPSET_MAIN6" src -j DROP
+    fi
+
+    # AutoBan (Conditional)
+    if [ "$ENABLE_AUTOBAN" = "true" ] && ipset list -n "$IPSET_AUTOBAN6" >/dev/null 2>&1; then
+        ip6tables -A BLOCKLIST_IN6 -m set --match-set "$IPSET_AUTOBAN6" src -j NFLOG --nflog-group 1 --nflog-range 128 --nflog-prefix "FW_DROP6"
+        ip6tables -A BLOCKLIST_IN6 -m set --match-set "$IPSET_AUTOBAN6" src -j DROP
+        ip6tables -A BLOCKLIST_FWD6 -m set --match-set "$IPSET_AUTOBAN6" src -j NFLOG --nflog-group 1 --nflog-range 128 --nflog-prefix "FW_DROP6"
+        ip6tables -A BLOCKLIST_FWD6 -m set --match-set "$IPSET_AUTOBAN6" src -j DROP
     fi
 
     # Trap Logic
@@ -313,19 +336,26 @@ if [ "$ENABLE_IPV6" = "true" ]; then
 
     # IPv6 TCP Services
     if [ -n "$TCP_PORTS_CSV" ]; then
-        ip6tables -A SCAN_TRAP6 -p tcp -m multiport --dports "$TCP_PORTS_CSV" \
-            -m connlimit --connlimit-above 15 -j DROP
+        
+        # MODULAR: ConnLimit
+        if [ "$ENABLE_CONNLIMIT" = "true" ]; then
+            ip6tables -A SCAN_TRAP6 -p tcp -m multiport --dports "$TCP_PORTS_CSV" \
+                -m connlimit --connlimit-above "$CONNLIMIT_MAX" -j DROP
+        fi
 
-        ip6tables -A SCAN_TRAP6 -p tcp -m multiport --dports "$TCP_PORTS_CSV" -m state --state NEW \
-            -m recent --update --seconds $BF_SECONDS --hitcount $BF_HITCOUNT --name BF_PROT6 --rsource \
-            -j SET --add-set "$IPSET_AUTOBAN6" src 2>/dev/null
+        # MODULAR: BruteForce
+        if [ "$ENABLE_BRUTEFORCE" = "true" ]; then
+            ip6tables -A SCAN_TRAP6 -p tcp -m multiport --dports "$TCP_PORTS_CSV" -m state --state NEW \
+                -m recent --update --seconds $BF_SECONDS --hitcount $BF_HITCOUNT --name BF_PROT6 --rsource \
+                -j SET --add-set "$IPSET_AUTOBAN6" src 2>/dev/null
 
-        ip6tables -A SCAN_TRAP6 -p tcp -m multiport --dports "$TCP_PORTS_CSV" -m state --state NEW \
-            -m recent --update --seconds $BF_SECONDS --hitcount $BF_HITCOUNT --name BF_PROT6 --rsource \
-            -j DROP
+            ip6tables -A SCAN_TRAP6 -p tcp -m multiport --dports "$TCP_PORTS_CSV" -m state --state NEW \
+                -m recent --update --seconds $BF_SECONDS --hitcount $BF_HITCOUNT --name BF_PROT6 --rsource \
+                -j DROP
 
-        ip6tables -A SCAN_TRAP6 -p tcp -m multiport --dports "$TCP_PORTS_CSV" -m state --state NEW \
-            -m recent --set --name BF_PROT6 --rsource
+            ip6tables -A SCAN_TRAP6 -p tcp -m multiport --dports "$TCP_PORTS_CSV" -m state --state NEW \
+                -m recent --set --name BF_PROT6 --rsource
+        fi
 
         ip6tables -A SCAN_TRAP6 -p tcp -m multiport --dports "$TCP_PORTS_CSV" -j RETURN
     fi
@@ -338,7 +368,7 @@ if [ "$ENABLE_IPV6" = "true" ]; then
 
     if ipset list -n "$IPSET_MAIN6" >/dev/null 2>&1; then ip6tables -A SCAN_TRAP6 -m set --match-set "$IPSET_MAIN6" src -j RETURN; fi
 
-    if ipset list -n "$IPSET_AUTOBAN6" >/dev/null 2>&1; then
+    if [ "$ENABLE_AUTOBAN" = "true" ] && ipset list -n "$IPSET_AUTOBAN6" >/dev/null 2>&1; then
         ip6tables -A SCAN_TRAP6 -m set ! --match-set "$IPSET_AUTOBAN6" src -j SET --add-set "$IPSET_AUTOBAN6" src 2>/dev/null
     fi
     
