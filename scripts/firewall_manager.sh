@@ -1,7 +1,7 @@
 #!/bin/sh
 
 # ==============================================================================
-# KEENETIC FIREWALL MANAGER v2.4.3 (FWD PROTECTION)
+# KEENETIC FIREWALL MANAGER v2.4.4 (FWD PROTECTION)
 # Changelog:
 #   - FIX: AutoBan list swapped when timeout change 
 #   - UX: Improved Port manager handling
@@ -160,7 +160,7 @@ save_config() {
 show_header() {
     clear
     echo -e "${CYAN}=================================================${NC}"
-    echo -e "${WHITE}      KEENETIC FIREWALL MANAGER v2.4.3      ${NC}"
+    echo -e "${WHITE}      KEENETIC FIREWALL MANAGER v2.4.4      ${NC}"
     echo -e "${CYAN}=================================================${NC}"
 }
 
@@ -372,11 +372,18 @@ manage_port_list() {
                 fi
                 ;;
             e|E)
-                echo -e "\nEdit the full string below:"
-                read -e -i "$CURRENT_LIST" NEW_VAL
-                if [ "$PROTO" = "TCP" ]; then TCP_SERVICES="$NEW_VAL"; else UDP_SERVICES="$NEW_VAL"; fi
-                save_config
-                echo -e "${GREEN}Saved.${NC}"
+                # FIX: Removed -e -i which causes crash on minimal shells
+                echo -e "\nCurrent Value: ${CYAN}${CURRENT_LIST}${NC}"
+                echo -e "Enter NEW string below (or press Enter to keep current):"
+                read -r NEW_VAL
+                
+                if [ -n "$NEW_VAL" ]; then
+                    if [ "$PROTO" = "TCP" ]; then TCP_SERVICES="$NEW_VAL"; else UDP_SERVICES="$NEW_VAL"; fi
+                    save_config
+                    echo -e "${GREEN}Saved.${NC}"
+                else
+                    echo -e "${YELLOW}No change.${NC}"
+                fi
                 sleep 1
                 ;;
             0) return ;;
@@ -402,9 +409,19 @@ do_port_editor() {
             1) manage_port_list "TCP" ;;
             2) manage_port_list "UDP" ;;
             3)
-                echo -e "\nEnter Passive Port Range (e.g. 50000:50100):"
-                read -e -i "$TCP_PASSIVE_RANGE" NEW_RNG
-                if [ -n "$NEW_RNG" ]; then TCP_PASSIVE_RANGE="$NEW_RNG"; save_config; echo -e "${GREEN}Saved.${NC}"; fi
+                # FIX: Removed -e -i incompatible with standard sh/ash
+                echo -e "\nCurrent Range: ${CYAN}${TCP_PASSIVE_RANGE:-None}${NC}"
+                echo -e "Enter Passive Port Range (e.g. 50000:50100) or Enter to keep:"
+                read -r NEW_RNG
+                
+                if [ -n "$NEW_RNG" ]; then 
+                    TCP_PASSIVE_RANGE="$NEW_RNG"
+                    save_config
+                    echo -e "${GREEN}Saved.${NC}"
+                else
+                    echo -e "${YELLOW}No change.${NC}"
+                fi
+                sleep 1
                 ;;
             0) return ;;
         esac
@@ -563,7 +580,7 @@ do_settings() {
         echo -e "${DIM} ---------------------------------------${NC}"
         echo -e " 3) AutoBan (Dynamic Blacklisting) ..... [$ST_BAN_TOG]"
         echo -e " 4) BruteForce Protection .............. [$ST_BF_TOG]"
-        echo -e " 5) DDoS ConnLimit (Max: $CONNLIMIT_MAX) ........ [$ST_CONN]"
+        echo -e " 5) DDoS ConnLimit (Max: $CONNLIMIT_MAX) ........... [$ST_CONN]"
         echo -e "${DIM} ---------------------------------------${NC}"
         echo -e " 6) Manage IPv4 Sources ................ [${WHITE}$CNT_V4 Active${NC}]"
         echo -e " 7) Manage IPv6 Sources ................ [${WHITE}$CNT_V6 Active${NC}]"
