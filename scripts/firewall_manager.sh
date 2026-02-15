@@ -1,8 +1,9 @@
 #!/bin/sh
 
 # ==============================================================================
-# KEENETIC FIREWALL MANAGER v2.4.2 (FWD PROTECTION)
+# KEENETIC FIREWALL MANAGER v2.4.3 (FWD PROTECTION)
 # Changelog:
+#   - FIX: AutoBan list swapped when timeout change 
 #   - UX: Improved Port manager handling
 #   - FIX: Updated Diagnostic engine 
 #   - FEAT: Toggle for AutoBan (Dynamic Blacklisting).
@@ -159,7 +160,7 @@ save_config() {
 show_header() {
     clear
     echo -e "${CYAN}=================================================${NC}"
-    echo -e "${WHITE}      KEENETIC FIREWALL MANAGER v2.4.1      ${NC}"
+    echo -e "${WHITE}      KEENETIC FIREWALL MANAGER v2.4.3      ${NC}"
     echo -e "${CYAN}=================================================${NC}"
 }
 
@@ -489,9 +490,46 @@ do_timeout_setup() {
     esac
 
     if [ -n "$NEW_VAL" ] && echo "$NEW_VAL" | grep -qE '^[0-9]+$'; then
+        # 1. Save Configuration
         BAN_TIMEOUT="$NEW_VAL"
         save_config
-        echo -e "${GREEN}Timeout updated. Restart Firewall Hook to apply.${NC}"
+        
+        # 2. HOT SWAP APPLICATION (ATOMIC UPDATE)
+        echo -e "\n${YELLOW}Applying new structure to running IPsets...${NC}"
+        
+        # --- IPv4 Handling ---
+        if ipset list -n AutoBan >/dev/null 2>&1; then
+            echo " -> Rebuilding AutoBan (v4) with timeout $NEW_VAL..."
+            # Create a temporary list with the NEW timeout value
+            if [ "$NEW_VAL" -eq "0" ]; then
+                ipset create AutoBan_TMP hash:net maxelem 524288 counters -exist
+            else
+                ipset create AutoBan_TMP hash:net timeout "$NEW_VAL" maxelem 524288 counters -exist
+            fi
+            
+            # Swap the active list with the temporary one (Atomic Swap)
+            # The old list (static/wrong) becomes _TMP, the new one becomes AutoBan
+            ipset swap AutoBan_TMP AutoBan
+            
+            # Destroy the old list
+            ipset destroy AutoBan_TMP
+            echo -e "${GREEN} -> v4 Updated.${NC}"
+        fi
+
+        # --- IPv6 Handling ---
+        if [ "$ENABLE_IPV6" = "true" ] && ipset list -n AutoBan6 >/dev/null 2>&1; then
+            echo " -> Rebuilding AutoBan (v6) with timeout $NEW_VAL..."
+            if [ "$NEW_VAL" -eq "0" ]; then
+                ipset create AutoBan6_TMP hash:net family inet6 maxelem 65536 counters -exist
+            else
+                ipset create AutoBan6_TMP hash:net family inet6 timeout "$NEW_VAL" maxelem 65536 counters -exist
+            fi
+            ipset swap AutoBan6_TMP AutoBan6
+            ipset destroy AutoBan6_TMP
+            echo -e "${GREEN} -> v6 Updated.${NC}"
+        fi
+
+        echo -e "\n${GREEN}Timeout updated successfully without restart.${NC}"
     else
         echo -e "${RED}Invalid input.${NC}"
     fi
