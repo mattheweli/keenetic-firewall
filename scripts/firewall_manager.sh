@@ -1,8 +1,9 @@
 #!/bin/sh
 
 # ==============================================================================
-# KEENETIC FIREWALL MANAGER v2.4.4 (FWD PROTECTION)
+# KEENETIC FIREWALL MANAGER v2.4.5 (FWD PROTECTION)
 # Changelog:
+#   - FIX: Missing flush function menu
 #   - FIX: AutoBan list swapped when timeout change 
 #   - UX: Improved Port manager handling
 #   - FIX: Updated Diagnostic engine 
@@ -160,7 +161,7 @@ save_config() {
 show_header() {
     clear
     echo -e "${CYAN}=================================================${NC}"
-    echo -e "${WHITE}      KEENETIC FIREWALL MANAGER v2.4.4      ${NC}"
+    echo -e "${WHITE}      KEENETIC FIREWALL MANAGER v2.4.5      ${NC}"
     echo -e "${CYAN}=================================================${NC}"
 }
 
@@ -551,6 +552,63 @@ do_timeout_setup() {
         echo -e "${RED}Invalid input.${NC}"
     fi
     pause
+}
+
+# --- FLUSH MENU (MANUAL CLEANUP) ---
+do_flush_menu() {
+    while true; do
+        show_header
+        echo -e "${YELLOW}--- FLUSH IP SETS (CLEAR LISTS) ---${NC}"
+        echo -e "Select a list to empty immediately:"
+        echo ""
+        echo -e " 1) AutoBan (Dynamic Bans)     [v4/v6]"
+        echo -e " 2) FirewallBlock (Static)     [v4/v6]"
+        echo -e " 3) VPNBlock (VPN Bad IPs)     [v4]"
+        echo -e " 4) Whitelist (Trusted)        [v4/v6]"
+        echo -e " 9) ${RED}FLUSH ALL LISTS${NC}"
+        echo -e " 0) Back"
+        echo ""
+        echo -n "Select option: "
+        read -r fopt
+        
+        case $fopt in
+            1) 
+                ipset flush AutoBan 2>/dev/null
+                ipset flush AutoBan6 2>/dev/null
+                echo -e "${GREEN}AutoBan lists flushed.${NC}"
+                sleep 1 
+                ;;
+            2) 
+                ipset flush FirewallBlock 2>/dev/null
+                ipset flush FirewallBlock6 2>/dev/null
+                echo -e "${GREEN}Static Blocklists flushed.${NC}"
+                sleep 1 
+                ;;
+            3) 
+                ipset flush VPNBlock 2>/dev/null
+                echo -e "${GREEN}VPNBlock flushed.${NC}"
+                sleep 1 
+                ;;
+            4) 
+                ipset flush FirewallWhite 2>/dev/null
+                ipset flush FirewallWhite6 2>/dev/null
+                echo -e "${GREEN}Whitelists flushed.${NC}"
+                sleep 1 
+                ;;
+            9) 
+                echo -e "${RED}WARNING: You are about to remove ALL protections.${NC}"
+                echo -n "Are you sure? (y/n): "
+                read -r confirm
+                if [ "$confirm" = "y" ]; then
+                    ipset flush
+                    echo -e "${RED}ALL IP SETS FLUSHED.${NC}"
+                    sleep 1
+                fi
+                ;;
+            0) return ;;
+            *) echo "Invalid option"; sleep 1 ;;
+        esac
+    done
 }
 
 do_settings() {
