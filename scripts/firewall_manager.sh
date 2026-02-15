@@ -1,8 +1,15 @@
 #!/bin/sh
 
 # ==============================================================================
-# KEENETIC FIREWALL MANAGER v2.3.7 (FWD PROTECTION)
+# KEENETIC FIREWALL MANAGER v2.4.2 (FWD PROTECTION)
 # Changelog:
+#   - UX: Improved Port manager handling
+#   - FIX: Updated Diagnostic engine 
+#   - FEAT: Toggle for AutoBan (Dynamic Blacklisting).
+#   - FEAT: Toggle for BruteForce Protection (xt_recent).
+#   - FEAT: Toggle & Config for DDoS Protection (xt_connlimit).
+#   - UX: "Flush on Disable" logic for AutoBan.
+#   - OPS: Dedicated Menu for Flushing specific IP Sets.
 #   - FWD: Added toggle for Forward Chain Protection (NAS/DMZ).
 #   - REPORTER: Added configuration for AbuseIPDB Reporting Cooldown.
 #   - UX: Grouped API Key and Cooldown under "AbuseIPDB Settings".
@@ -24,10 +31,14 @@ KEY_FILE="/opt/etc/AbuseIPDB.key"
 # --- DEFAULTS ---
 DEF_IPV6="true"
 DEF_FWD_PROT="false" # Default OFF
+DEF_ENABLE_AUTOBAN="true"
+DEF_ENABLE_BF="true"
+DEF_ENABLE_CONN="true"
+DEF_CONN_MAX="15"
 DEF_BAN_TIME="86400" # 24 Hours
-DEF_TCP="447 51515 55422 11872 2121"
-DEF_UDP="16257 51515 33252"
-DEF_PASSIVE="55536:55541"
+DEF_TCP="80 443"
+DEF_UDP=""
+DEF_PASSIVE=""
 DEF_BF_SEC="60"
 DEF_BF_HIT="5"
 DEF_REP_COOL="604800" # 7 Days
@@ -80,9 +91,19 @@ calculate_seconds() {
 
 # --- CONFIG ENGINE ---
 load_config() {
+    # If configuration file doesn't exist, create it with default values
     if [ ! -f "$CONF_FILE" ]; then
+        echo "Generating default configuration file..."
         echo "ENABLE_IPV6=\"$DEF_IPV6\"" > "$CONF_FILE"
         echo "ENABLE_FWD_PROTECTION=\"$DEF_FWD_PROT\"" >> "$CONF_FILE"
+        
+        # New Security Modules
+        echo "ENABLE_AUTOBAN=\"$DEF_ENABLE_AUTOBAN\"" >> "$CONF_FILE"
+        echo "ENABLE_BRUTEFORCE=\"$DEF_ENABLE_BF\"" >> "$CONF_FILE"
+        echo "ENABLE_CONNLIMIT=\"$DEF_ENABLE_CONN\"" >> "$CONF_FILE"
+        echo "CONNLIMIT_MAX=\"$DEF_CONN_MAX\"" >> "$CONF_FILE"
+        
+        # Standard Parameters
         echo "BAN_TIMEOUT=\"$DEF_BAN_TIME\"" >> "$CONF_FILE"
         echo "TCP_SERVICES=\"$DEF_TCP\"" >> "$CONF_FILE"
         echo "UDP_SERVICES=\"$DEF_UDP\"" >> "$CONF_FILE"
@@ -90,22 +111,31 @@ load_config() {
         echo "BF_SECONDS=\"$DEF_BF_SEC\"" >> "$CONF_FILE"
         echo "BF_HITCOUNT=\"$DEF_BF_HIT\"" >> "$CONF_FILE"
         echo "REPORT_COOLDOWN=\"$DEF_REP_COOL\"" >> "$CONF_FILE"
+        
+        # Blocklist Sources (Required for update_blocklist.sh)
         echo "SOURCES_V4=\"$L4_DEFAULTS\"" >> "$CONF_FILE"
         echo "SOURCES_V6=\"$L6_DEFAULTS\"" >> "$CONF_FILE"
     fi
-    source "$CONF_FILE"
     
-    # Defaults / Fallback
-    [ -z "$BAN_TIMEOUT" ] && BAN_TIMEOUT="86400"
-    [ -z "$SOURCES_V4" ] && SOURCES_V4="$L4_DEFAULTS"
-    [ -z "$SOURCES_V6" ] && SOURCES_V6="$L6_DEFAULTS"
-    : ${ENABLE_FWD_PROTECTION:="$DEF_FWD_PROT"}
-    : ${TCP_SERVICES:="$DEF_TCP"}
-    : ${UDP_SERVICES:="$DEF_UDP"}
-    : ${TCP_PASSIVE_RANGE:="$DEF_PASSIVE"}
-    : ${BF_SECONDS:="$DEF_BF_SEC"}
-    : ${BF_HITCOUNT:="$DEF_BF_HIT"}
-    : ${REPORT_COOLDOWN:="$DEF_REP_COOL"}
+    # Load configuration from file
+    . "$CONF_FILE"
+    
+    # Memory Fallback (Safety check: if variable missing in file, use default)
+    : ${ENABLE_IPV6:=$DEF_IPV6}
+    : ${ENABLE_FWD_PROTECTION:=$DEF_FWD_PROT}
+    : ${ENABLE_AUTOBAN:=$DEF_ENABLE_AUTOBAN}
+    : ${ENABLE_BRUTEFORCE:=$DEF_ENABLE_BF}
+    : ${ENABLE_CONNLIMIT:=$DEF_ENABLE_CONN}
+    : ${CONNLIMIT_MAX:=$DEF_CONN_MAX}
+    : ${BAN_TIMEOUT:=$DEF_BAN_TIME}
+    : ${TCP_SERVICES:=$DEF_TCP}
+    : ${UDP_SERVICES:=$DEF_UDP}
+    : ${TCP_PASSIVE_RANGE:=$DEF_PASSIVE}
+    : ${BF_SECONDS:=$DEF_BF_SEC}
+    : ${BF_HITCOUNT:=$DEF_BF_HIT}
+    : ${REPORT_COOLDOWN:=$DEF_REP_COOL}
+    : ${SOURCES_V4:=$L4_DEFAULTS}
+    : ${SOURCES_V6:=$L6_DEFAULTS}
     
     [ ! -f "$WHITELIST_FILE" ] && touch "$WHITELIST_FILE"
 }
@@ -129,7 +159,7 @@ save_config() {
 show_header() {
     clear
     echo -e "${CYAN}=================================================${NC}"
-    echo -e "${WHITE}      KEENETIC FIREWALL MANAGER v2.3.7      ${NC}"
+    echo -e "${WHITE}      KEENETIC FIREWALL MANAGER v2.4.1      ${NC}"
     echo -e "${CYAN}=================================================${NC}"
 }
 
@@ -140,8 +170,8 @@ do_whitelist_menu() {
     while true; do
         show_header
         echo -e "${YELLOW}--- MANAGE WHITELIST (Trust List) ---${NC}"
-        echo -e "${DIM}IPs, Subnets, or Domains listed here will bypass ALL blocks.${NC}"
-        echo -e "${DIM}Domains are resolved to IPs when you click 'Apply'.${NC}\n"
+        echo -e "${DIM}IPs (v4/v6), Subnets, or Domains here bypass ALL blocks.${NC}"
+        echo -e "${DIM}Domains are resolved to both IPv4 and IPv6 automatically.${NC}\n"
         
         if [ -s "$WHITELIST_FILE" ]; then
             awk '{print NR")", $0}' "$WHITELIST_FILE"
@@ -149,7 +179,7 @@ do_whitelist_menu() {
             echo -e "${DIM}(Whitelist is empty)${NC}"
         fi
         
-        echo -e "\n a) Add Entry (IP, CIDR, or Domain)"
+        echo -e "\n a) Add Entry (IP, IPv6, CIDR, Domain)"
         echo -e " r) Remove Entry"
         echo -e " x) ${GREEN}APPLY & RESOLVE${NC} (Load into Firewall)"
         echo -e " 0) Back"
@@ -158,7 +188,7 @@ do_whitelist_menu() {
         read -r WOPT
         case $WOPT in
             a)
-                echo -e "\nEnter IP (1.2.3.4), Subnet (1.2.3.0/24) or Domain (google.com):"
+                echo -e "\nEnter IP (1.2.3.4), IPv6 (2001::1), Subnet or Domain:"
                 read -r NEW_ENTRY
                 if [ -n "$NEW_ENTRY" ]; then
                     echo "$NEW_ENTRY" >> "$WHITELIST_FILE"
@@ -274,34 +304,105 @@ do_reporter_setup() {
     done
 }
 
-# --- PORT EDITOR ---
+# --- PORT EDITOR (ADVANCED) ---
+manage_port_list() {
+    PROTO=$1
+    while true; do
+        # Determine variable name based on protocol
+        if [ "$PROTO" = "TCP" ]; then
+            CURRENT_LIST="$TCP_SERVICES"
+            VAR_NAME="TCP_SERVICES"
+        else
+            CURRENT_LIST="$UDP_SERVICES"
+            VAR_NAME="UDP_SERVICES"
+        fi
+
+        show_header
+        echo -e "${YELLOW}--- MANAGE $PROTO PORTS ---${NC}"
+        echo -e "Current List: ${GREEN}${CURRENT_LIST:-None}${NC}"
+        echo ""
+        echo -e " a) Add Port(s)"
+        echo -e " r) Remove Port"
+        echo -e " e) Edit Raw String (Manual)"
+        echo -e " 0) Back"
+        echo ""
+        echo -n "Select option: "
+        read -r MOPT
+
+        case $MOPT in
+            a|A)
+                echo -e "\nEnter port number(s) to ADD (separated by space):"
+                read -r TO_ADD
+                if [ -n "$TO_ADD" ]; then
+                    # Simple Append
+                    NEW_VAL="$CURRENT_LIST $TO_ADD"
+                    # Clean up spaces (xargs trims)
+                    NEW_VAL=$(echo "$NEW_VAL" | xargs)
+                    # Save
+                    if [ "$PROTO" = "TCP" ]; then TCP_SERVICES="$NEW_VAL"; else UDP_SERVICES="$NEW_VAL"; fi
+                    save_config
+                    echo -e "${GREEN}Port(s) added.${NC}"
+                    sleep 1
+                fi
+                ;;
+            r|R)
+                echo -e "\nEnter port number to REMOVE:"
+                read -r TO_REM
+                if [ -n "$TO_REM" ]; then
+                    NEW_LIST=""
+                    FOUND=0
+                    for p in $CURRENT_LIST; do
+                        if [ "$p" != "$TO_REM" ]; then
+                            NEW_LIST="$NEW_LIST $p"
+                        else
+                            FOUND=1
+                        fi
+                    done
+                    
+                    if [ "$FOUND" -eq 1 ]; then
+                        NEW_VAL=$(echo "$NEW_LIST" | xargs)
+                        if [ "$PROTO" = "TCP" ]; then TCP_SERVICES="$NEW_VAL"; else UDP_SERVICES="$NEW_VAL"; fi
+                        save_config
+                        echo -e "${GREEN}Port $TO_REM removed.${NC}"
+                    else
+                        echo -e "${RED}Port $TO_REM not found in list.${NC}"
+                    fi
+                    sleep 1
+                fi
+                ;;
+            e|E)
+                echo -e "\nEdit the full string below:"
+                read -e -i "$CURRENT_LIST" NEW_VAL
+                if [ "$PROTO" = "TCP" ]; then TCP_SERVICES="$NEW_VAL"; else UDP_SERVICES="$NEW_VAL"; fi
+                save_config
+                echo -e "${GREEN}Saved.${NC}"
+                sleep 1
+                ;;
+            0) return ;;
+            *) echo "Invalid option"; sleep 1 ;;
+        esac
+    done
+}
+
 do_port_editor() {
     while true; do
         show_header
         echo -e "${YELLOW}--- ALLOWED PORTS & SERVICES ---${NC}"
         echo -e "${DIM}Traffic on these ports will NOT trigger the Trap.${NC}"
         echo ""
-        echo -e " 1) TCP Ports:         ${GREEN}${TCP_SERVICES:-None}${NC}"
-        echo -e " 2) UDP Ports:         ${GREEN}${UDP_SERVICES:-None}${NC}"
-        echo -e " 3) TCP Passive Range: ${GREEN}${TCP_PASSIVE_RANGE:-None}${NC}"
+        echo -e " 1) Manage TCP Ports     [${GREEN}${TCP_SERVICES:-None}${NC}]"
+        echo -e " 2) Manage UDP Ports     [${GREEN}${UDP_SERVICES:-None}${NC}]"
+        echo -e " 3) TCP Passive Range    [${GREEN}${TCP_PASSIVE_RANGE:-None}${NC}]"
         echo -e " 0) Back"
         echo ""
         echo -n "Select option: "
         read -r POPT
         case $POPT in
-            1) 
-                echo -e "\nEnter TCP ports separated by SPACE (e.g. 22 80 443):"
-                read -r NEW_TCP
-                if [ -n "$NEW_TCP" ]; then TCP_SERVICES="$NEW_TCP"; save_config; echo -e "${GREEN}Saved.${NC}"; fi
-                ;;
-            2) 
-                echo -e "\nEnter UDP ports separated by SPACE (e.g. 1194 51820):"
-                read -r NEW_UDP
-                if [ -n "$NEW_UDP" ]; then UDP_SERVICES="$NEW_UDP"; save_config; echo -e "${GREEN}Saved.${NC}"; fi
-                ;;
+            1) manage_port_list "TCP" ;;
+            2) manage_port_list "UDP" ;;
             3)
                 echo -e "\nEnter Passive Port Range (e.g. 50000:50100):"
-                read -r NEW_RNG
+                read -e -i "$TCP_PASSIVE_RANGE" NEW_RNG
                 if [ -n "$NEW_RNG" ]; then TCP_PASSIVE_RANGE="$NEW_RNG"; save_config; echo -e "${GREEN}Saved.${NC}"; fi
                 ;;
             0) return ;;
@@ -402,37 +503,99 @@ do_settings() {
     while true; do
         show_header
         echo -e "${YELLOW}--- CONFIGURATION SETTINGS ---${NC}"
+        
+        # Status Flags & Colors
         if [ "$ENABLE_IPV6" = "true" ]; then ST_V6="${GREEN}ON${NC}"; else ST_V6="${RED}OFF${NC}"; fi
-        # [NEW] Forward Status
         if [ "$ENABLE_FWD_PROTECTION" = "true" ]; then ST_FWD="${GREEN}ON${NC}"; else ST_FWD="${RED}OFF${NC}"; fi
         
+        # New Security Modules Status
+        if [ "$ENABLE_AUTOBAN" = "true" ]; then ST_BAN_TOG="${GREEN}ON${NC}"; else ST_BAN_TOG="${RED}OFF${NC}"; fi
+        if [ "$ENABLE_BRUTEFORCE" = "true" ]; then ST_BF_TOG="${GREEN}ON${NC}"; else ST_BF_TOG="${RED}OFF${NC}"; fi
+        if [ "$ENABLE_CONNLIMIT" = "true" ]; then ST_CONN="${GREEN}ON${NC}"; else ST_CONN="${RED}OFF${NC}"; fi
+
+        # Stats for display
         CNT_V4=$(echo "$SOURCES_V4" | awk '{print NF}')
         CNT_V6=$(echo "$SOURCES_V6" | awk '{print NF}')
-        if [ "$BAN_TIMEOUT" -eq 0 ]; then ST_BAN="${RED}Unlimited${NC}"; else ST_BAN="${GREEN}${BAN_TIMEOUT}s${NC}"; fi
-        ST_BF="${WHITE}${BF_HITCOUNT}hits/${BF_SECONDS}s${NC}"
+        if [ "$BAN_TIMEOUT" -eq 0 ]; then ST_TIMEOUT="${RED}Unlimited${NC}"; else ST_TIMEOUT="${GREEN}${BAN_TIMEOUT}s${NC}"; fi
+        ST_BF_SENS="${WHITE}${BF_HITCOUNT}hits/${BF_SECONDS}s${NC}"
 
-        echo -e " 1) IPv6 Support:            [$ST_V6]"
-        echo -e " 2) Manage IPv4 Sources:     [${WHITE}$CNT_V4 Active${NC}]"
-        echo -e " 3) Manage IPv6 Sources:     [${WHITE}$CNT_V6 Active${NC}]"
-        echo -e " 4) Allowed Ports:           [${WHITE}Edit...${NC}]"
-        echo -e " 5) Auto-Ban Timeout:        [$ST_BAN]"
-        echo -e " 6) AbuseIPDB Settings:      [${WHITE}Key & Cooldown${NC}]"
-        echo -e " 7) Brute-Force Sensitivity: [$ST_BF]"
-        echo -e " 8) Forward Protection:      [$ST_FWD]"
+        # --- MENU LAYOUT ---
+        echo -e " 1) IPv6 Support ....................... [$ST_V6]"
+        echo -e " 2) Forward Protection (NAS/DMZ) ....... [$ST_FWD]"
+        echo -e "${DIM} ---------------------------------------${NC}"
+        echo -e " 3) AutoBan (Dynamic Blacklisting) ..... [$ST_BAN_TOG]"
+        echo -e " 4) BruteForce Protection .............. [$ST_BF_TOG]"
+        echo -e " 5) DDoS ConnLimit (Max: $CONNLIMIT_MAX) ........ [$ST_CONN]"
+        echo -e "${DIM} ---------------------------------------${NC}"
+        echo -e " 6) Manage IPv4 Sources ................ [${WHITE}$CNT_V4 Active${NC}]"
+        echo -e " 7) Manage IPv6 Sources ................ [${WHITE}$CNT_V6 Active${NC}]"
+        echo -e " 8) Allowed Ports (TCP/UDP) ............ [${WHITE}Edit...${NC}]"
+        echo -e " 9) Auto-Ban Timeout ................... [$ST_TIMEOUT]"
+        echo -e " 10) Brute-Force Sensitivity ........... [$ST_BF_SENS]"
+        echo -e " 11) AbuseIPDB Settings ................ [${WHITE}Key & Cooldown${NC}]"
+        echo ""
         echo -e " 0) Back to Main Menu"
         echo ""
         echo -n "Select option: "
         read -r SOPT
+        
         case $SOPT in
-            1) if [ "$ENABLE_IPV6" = "true" ]; then ENABLE_IPV6="false"; else ENABLE_IPV6="true"; fi; save_config ;;
-            2) do_manage_sources "V4" ;;
-            3) do_manage_sources "V6" ;;
-            4) do_port_editor ;;
-            5) do_timeout_setup ;;
-            6) do_reporter_setup ;;
-            7) do_bf_setup ;;
-            8) if [ "$ENABLE_FWD_PROTECTION" = "true" ]; then ENABLE_FWD_PROTECTION="false"; else ENABLE_FWD_PROTECTION="true"; fi; save_config ;;
+            1) 
+                if [ "$ENABLE_IPV6" = "true" ]; then ENABLE_IPV6="false"; else ENABLE_IPV6="true"; fi
+                save_config 
+                ;;
+            2) 
+                if [ "$ENABLE_FWD_PROTECTION" = "true" ]; then 
+                    ENABLE_FWD_PROTECTION="false"
+                else 
+                    echo -e "${YELLOW}WARNING: This blocks traffic to internal servers unless whitelisted!${NC}"
+                    read -p "Confirm? (y/n): " c; [ "$c" = "y" ] && ENABLE_FWD_PROTECTION="true"
+                fi
+                save_config 
+                ;;
+            3) 
+                # AutoBan Logic with Flush Prompt
+                if [ "$ENABLE_AUTOBAN" = "true" ]; then 
+                    ENABLE_AUTOBAN="false"
+                    echo ""
+                    echo -e "${YELLOW}AutoBan Disabled.${NC}"
+                    read -p "Do you want to FLUSH existing banned IPs? (y/n): " flush_confirm
+                    if [ "$flush_confirm" = "y" ]; then
+                        ipset flush AutoBan 2>/dev/null
+                        ipset flush AutoBan6 2>/dev/null
+                        echo -e "${GREEN}AutoBan lists cleared.${NC}"
+                        sleep 1
+                    fi
+                else 
+                    ENABLE_AUTOBAN="true"
+                fi
+                save_config 
+                ;;
+            4) 
+                if [ "$ENABLE_BRUTEFORCE" = "true" ]; then ENABLE_BRUTEFORCE="false"; else ENABLE_BRUTEFORCE="true"; fi
+                save_config 
+                ;;
+            5) 
+                # ConnLimit Logic with Config
+                if [ "$ENABLE_CONNLIMIT" = "true" ]; then 
+                    ENABLE_CONNLIMIT="false"
+                else 
+                    ENABLE_CONNLIMIT="true"
+                    echo ""
+                    echo -n "Enter Max Connections per IP [Current: $CONNLIMIT_MAX]: "
+                    read -r new_max
+                    if [ -n "$new_max" ]; then CONNLIMIT_MAX="$new_max"; fi
+                fi
+                save_config 
+                ;;
+            6) do_manage_sources "V4" ;;
+            7) do_manage_sources "V6" ;;
+            8) do_port_editor ;;
+            9) do_timeout_setup ;;
+            10) do_bf_setup ;;
+            11) do_reporter_setup ;;
             0) return ;;
+            *) echo "Invalid option"; sleep 1 ;;
         esac
     done
 }
@@ -459,29 +622,81 @@ do_manage_sources() {
 do_health_check() {
     clear
     echo -e "${YELLOW}=== FIREWALL DIAGNOSTICS ===${NC}"
-    echo -e "\n${BOLD}1. Database Status (IP Sets)${NC}"
+
+    # 1. SYSTEM HEALTH
+    echo -e "\n${BOLD}1. System Components${NC}"
+    
+    # Check Logging Daemon (ULOGD)
+    # Controllo robusto con ps
+    if ps | grep -v grep | grep -q "ulogd"; then 
+        echo -e "   Logger (ULOGD):     ${GREEN}RUNNING${NC}"
+    else 
+        echo -e "   Logger (ULOGD):     ${RED}STOPPED (No logs will be recorded)${NC}"
+    fi
+
+    # Check Scheduler (CRON & JOB) - FIX ROBUSTO
+    # Verifica sia 'crond' che 'cron' usando ps
+    if ! ps | grep -v grep | grep -qE "crond|cron"; then 
+        echo -e "   Scheduler (CRON):   ${RED}STOPPED (Daemon not running)${NC}"
+    else 
+        # Il demone gira, verifichiamo se il job esiste
+        if crontab -l 2>/dev/null | grep -q "update_blocklist.sh"; then
+            echo -e "   Scheduler (CRON):   ${GREEN}ACTIVE (Job scheduled)${NC}"
+        else
+            echo -e "   Scheduler (CRON):   ${YELLOW}WARNING (Daemon ON, but Job MISSING)${NC}"
+        fi
+    fi
+
+    # Check Kernel Modules
+    if lsmod | grep -q "xt_recent"; then 
+        echo -e "   BruteForce Module:  ${GREEN}LOADED${NC}"
+    else 
+        echo -e "   BruteForce Module:  ${RED}MISSING (xt_recent)${NC}"
+    fi
+
+    # 2. IP SETS STATUS
+    echo -e "\n${BOLD}2. IP Sets Status${NC}"
+    
+    # --- IPv4 ---
     CNT_V4=$(ipset list FirewallBlock 2>/dev/null | grep -cE '^[0-9]')
     if [ "$CNT_V4" -gt 100 ]; then STATUS="${GREEN}OK ($CNT_V4 IPs)${NC}"; else STATUS="${RED}CRITICAL (Empty/Low: $CNT_V4)${NC}"; fi
-    echo -e "   IPv4 Blocklist: $STATUS"
+    echo -e "   IPv4 Blocklist:     $STATUS"
+    
     CNT_WHITE=$(ipset list FirewallWhite 2>/dev/null | grep -cE '^[0-9]')
-    echo -e "   IPv4 Whitelist: ${CYAN}$CNT_WHITE IPs${NC}"
+    echo -e "   IPv4 Whitelist:     ${CYAN}$CNT_WHITE IPs${NC}"
+    
     CNT_BAN=$(ipset list AutoBan 2>/dev/null | grep -cE '^[0-9]')
-    if ipset list AutoBan >/dev/null 2>&1; then echo -e "   Auto-Ban:       ${GREEN}ACTIVE${NC} (${RED}$CNT_BAN IPs${NC})"; else echo -e "   Auto-Ban:       ${RED}MISSING${NC}"; fi
+    if ipset list AutoBan >/dev/null 2>&1; then 
+        echo -e "   Auto-Ban (Trap):    ${GREEN}ACTIVE${NC} (${RED}$CNT_BAN IPs${NC})"
+    else 
+        echo -e "   Auto-Ban (Trap):    ${RED}MISSING${NC}"
+    fi
+    
     CNT_VPN=$(ipset list VPNBlock 2>/dev/null | grep -cE '^[0-9]')
-    echo -e "   VPN List:       ${CYAN}$CNT_VPN IPs${NC}"
+    echo -e "   VPN Blocklist:      ${CYAN}$CNT_VPN IPs${NC}"
+    
+    # --- IPv6 ---
     if [ "$ENABLE_IPV6" = "true" ]; then
         CNT_V6=$(ipset list FirewallBlock6 2>/dev/null | grep -cE '^[0-9a-fA-F:]')
         if [ "$CNT_V6" -gt 10 ]; then STATUS="${GREEN}OK ($CNT_V6 IPs)${NC}"; else STATUS="${RED}CRITICAL (Empty: $CNT_V6)${NC}"; fi
-        echo -e "   IPv6 Blocklist: $STATUS"
+        echo -e "   IPv6 Blocklist:     $STATUS"
+        
+        # [ADDED] IPv6 Whitelist Display
         CNT_WHITE6=$(ipset list FirewallWhite6 2>/dev/null | grep -cE '^[0-9a-fA-F:]')
-        echo -e "   IPv6 Whitelist: ${CYAN}$CNT_WHITE6 IPs${NC}"
+        echo -e "   IPv6 Whitelist:     ${CYAN}$CNT_WHITE6 IPs${NC}"
+        
         CNT_BAN6=$(ipset list AutoBan6 2>/dev/null | grep -cE '^[0-9a-fA-F:]')
-        if ipset list AutoBan6 >/dev/null 2>&1; then echo -e "   Auto-Ban6:      ${GREEN}ACTIVE${NC} (${RED}$CNT_BAN6 IPs${NC})"; else echo -e "   Auto-Ban6:      ${RED}MISSING${NC}"; fi
+        if ipset list AutoBan6 >/dev/null 2>&1; then 
+            echo -e "   Auto-Ban6 (Trap):   ${GREEN}ACTIVE${NC} (${RED}$CNT_BAN6 IPs${NC})"
+        else 
+            echo -e "   Auto-Ban6 (Trap):   ${RED}MISSING${NC}"
+        fi
     else
-        echo -e "   IPv6 List:      ${DIM}Disabled${NC}"
+        echo -e "   IPv6 Support:       ${DIM}Disabled${NC}"
     fi
-    if pgrep -f "fw_syn_ring.pcap" >/dev/null; then echo -e "   Sniffer:        ${GREEN}RUNNING${NC}"; else echo -e "   Sniffer:        ${RED}STOPPED${NC}"; fi
-    echo -e "\n${BOLD}2. Integration (Chain Links)${NC}"
+    
+    # 3. CHAIN INTEGRATION
+    echo -e "\n${BOLD}3. Firewall Integration${NC}"
     check_chain() {
         TOOL=$1; CHAIN=$2; PARENT=$3
         if $TOOL -C $PARENT -j $CHAIN 2>/dev/null; then LINK="${GREEN}LINKED${NC}"; else LINK="${RED}UNLINKED${NC}"; fi
@@ -491,12 +706,14 @@ do_health_check() {
     check_chain "iptables" "BLOCKLIST_IN" "INPUT"
     check_chain "iptables" "BLOCKLIST_FWD" "FORWARD"
     check_chain "iptables" "SCAN_TRAP" "BLOCKLIST_IN"
+    
     if [ "$ENABLE_IPV6" = "true" ]; then
         echo -e "   ${DIM}--- IPv6 Chains ---${NC}"
         check_chain "ip6tables" "BLOCKLIST_IN6" "INPUT"
         check_chain "ip6tables" "BLOCKLIST_FWD6" "FORWARD"
         check_chain "ip6tables" "SCAN_TRAP6" "BLOCKLIST_IN6"
     fi
+    
     echo ""
     pause
 }
@@ -522,6 +739,7 @@ while true; do
     echo -e " 7) ${RED}⚡ Restart Firewall Hook${NC} (Apply Config)"
     echo -e " 8) ${MAGENTA}⚙️  Configuration & API${NC}"
     echo -e " 9) ${GREEN}✅ Manage Whitelist${NC} (IPs/Domains)"
+    echo -e " f) ${RED}🗑️  Flush Lists (Manually)${NC}"
     echo -e " e) ${RED}❌ Exit${NC}"
     echo -e "${CYAN}-------------------------------------------------${NC}"
     echo -n "Select an option: "
@@ -537,6 +755,7 @@ while true; do
         7) do_restart ;;
         8) do_settings ;;
         9) do_whitelist_menu ;;
+        f|F) do_flush_menu ;;
         e|E) exit 0 ;;
         *) sleep 1 ;;
     esac
