@@ -1,9 +1,10 @@
 #!/bin/sh
 
 # ==============================================================================
-# KEENETIC FIREWALL HOOK v2.6.0 (MODULAR TRAP)
+# KEENETIC FIREWALL HOOK v2.6.1 (MODULAR TRAP)
 # Description: Dual-Stack Firewall with Auto-Ban, Connlimit & Port Logging.
 # Features:
+#   - FIX: IPv6 static list restore
 #   - MODULAR: Conditionally loads Connlimit, BruteForce, and AutoBan rules.
 #   - PERSISTENCE: Restores AutoBan lists from disk on startup/restart.
 #   - WHITELIST: High-priority IPSet for trusted IPs/Subnets.
@@ -106,7 +107,13 @@ fi
 if [ "$ENABLE_IPV6" = "true" ]; then
     if ! ipset list -n "$IPSET_MAIN6" >/dev/null 2>&1; then
         ipset create "$IPSET_MAIN6" hash:net family inet6 hashsize 4096 maxelem $MAX_ELEM_V6 counters -exist
+        
+        # [FIX] Aggiunta la riga mancante per il ripristino
+        if [ -f "/opt/etc/firewall_blocklist6.save" ]; then
+             ipset restore -! < "/opt/etc/firewall_blocklist6.save"
+        fi
     fi
+    
     if ! ipset list -n "$IPSET_WHITE6" >/dev/null 2>&1; then
         ipset create "$IPSET_WHITE6" hash:net family inet6 hashsize 1024 maxelem 65536 counters -exist
     fi
