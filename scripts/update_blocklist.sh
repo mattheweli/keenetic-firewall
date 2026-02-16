@@ -1,11 +1,12 @@
 #!/bin/sh
 
 # ==============================================================================
-# BLOCKLIST UPDATER v2.2.2 (SUMMARY LOG)
+# BLOCKLIST UPDATER v2.2.4 (SPLIT SAVE)
 # Features: 
 # - CONFIG: Reads /opt/etc/firewall.conf for ENABLE_IPV6 and SOURCE URLS.
 # - REPORTING: Generates a detailed summary in Syslog and Terminal.
 # - LOGIC: Skips Phase 2 (IPv6) completely if disabled.
+# - FIX: Saves IPv4 and IPv6 lists to separate files for reliable restore.
 # ==============================================================================
 
 export PATH=/opt/bin:/opt/sbin:/usr/bin:/usr/sbin:/bin:/sbin
@@ -48,7 +49,11 @@ CACHE_DURATION=21600
 DIFF_FILE_V4="/opt/etc/firewall_v4_diff.dat"
 DIFF_FILE_V6="/opt/etc/firewall_v6_diff.dat"
 DIFF_FILE_VPN="/opt/etc/firewall_vpn_diff.dat"
-BACKUP_FILE="/opt/etc/firewall_blocklist.save"
+
+# [MODIFIED] Separate Backup Files
+BACKUP_FILE_V4="/opt/etc/firewall_blocklist.save"
+BACKUP_FILE_V6="/opt/etc/firewall_blocklist6.save"
+
 LOG_TAG="Firewall_Update"
 
 # Trackers for Summary
@@ -77,7 +82,7 @@ load_turbo() {
     sed "s/^/add $SET_NAME /" "$FILE_CLEAN" | ipset restore -!
 }
 
-echo "=== Firewall Blocklist Updater v2.2.2 ==="
+echo "=== Firewall Blocklist Updater v2.2.4 ==="
 echo "[$(date '+%H:%M:%S')] Starting update. IPv6 Mode: $ENABLE_IPV6"
 
 # --- 1. INIT IPSETS ---
@@ -121,7 +126,9 @@ else
     
     CNT_V4_NEW=$(ipset list "$IPSET_TMP_NAME" | grep -cE '^[0-9]')
     if ipset swap "$IPSET_TMP_NAME" "$IPSET_NAME"; then
-        ipset save "$IPSET_NAME" > "$BACKUP_FILE"
+        # [MODIFIED] Explicit Save for IPv4
+        ipset save "$IPSET_NAME" > "$BACKUP_FILE_V4"
+        
         calc_diff "$CNT_V4_OLD" "$CNT_V4_NEW" "$DIFF_FILE_V4"
         CHG_V4=$(cat "$DIFF_FILE_V4")
         RES_V4=$CNT_V4_NEW
@@ -187,6 +194,9 @@ if [ "$ENABLE_IPV6" = "true" ]; then
         CNT_V6_NEW=$(ipset list "$IPSET_TMP_NAME6" | grep -cE '^[0-9a-fA-F:]')
 
         if ipset swap "$IPSET_TMP_NAME6" "$IPSET_NAME6"; then
+            # [MODIFIED] Explicit Save for IPv6
+            ipset save "$IPSET_NAME6" > "$BACKUP_FILE_V6"
+            
             calc_diff "$CNT_V6_OLD" "$CNT_V6_NEW" "$DIFF_FILE_V6"
             CHG_V6=$(cat "$DIFF_FILE_V6")
             RES_V6=$CNT_V6_NEW
@@ -231,7 +241,7 @@ echo "Done."
 # --- SUMMARY REPORT ---
 echo ""
 echo "================================================"
-echo "           BLOCKLIST UPDATE SUMMARY             "
+echo "            BLOCKLIST UPDATE SUMMARY            "
 echo "================================================"
 echo " IPv4 List: $RES_V4 ($CHG_V4)"
 echo " IPv6 List: $RES_V6 ($CHG_V6)"
