@@ -1,9 +1,10 @@
 #!/bin/sh
 
 # ==============================================================================
-# KEENETIC FIREWALL HOOK v2.6.1 (MODULAR TRAP)
+# KEENETIC FIREWALL HOOK v2.6.2 (MODULAR TRAP)
 # Description: Dual-Stack Firewall with Auto-Ban, Connlimit & Port Logging.
 # Features:
+#   - FIX: load_mod grep mode change
 #   - FIX: IPv6 static list restore
 #   - MODULAR: Conditionally loads Connlimit, BruteForce, and AutoBan rules.
 #   - PERSISTENCE: Restores AutoBan lists from disk on startup/restart.
@@ -19,10 +20,10 @@
 sleep 2
 export PATH=/opt/bin:/opt/sbin:/usr/bin:/usr/sbin:/bin:/sbin
 
-# --- 0. KERNEL MODULES LOADER ---
+# --- 0. KERNEL MODULES LOADER (FIXED BROKEN PIPE) ---
 load_mod() {
     MOD_NAME=$1
-    if ! lsmod | grep -q "$MOD_NAME"; then
+    if ! lsmod | grep "$MOD_NAME" >/dev/null 2>&1; then
         MOD_PATH="/lib/modules/4.9-ndm-5/${MOD_NAME}.ko"
         if [ ! -f "$MOD_PATH" ]; then
             MOD_PATH=$(find /lib/modules/$(uname -r) -name "${MOD_NAME}.ko" 2>/dev/null | head -n 1)
