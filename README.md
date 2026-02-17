@@ -157,11 +157,115 @@ keentool
 
 ---
 
-## 📂 File Structure
+# 🛡️ Firewall Manager CLI
 
-* `/opt/etc/firewall_stats.db`: SQLite database for stats.
-* `/opt/var/www/firewall/`: Generated HTML/JSON files for Firewall.
-* `/opt/etc/vpn_banned_ips.txt`: Persistent list of locally banned VPN attackers.
+The **Firewall Manager** (`firewall_manager.sh`) is the central control panel for the Keenetic Firewall Suite. It allows you to configure security modules, manage blacklists/whitelists, view real-time logs, and generate statistics without needing to edit configuration files manually.
+
+## 🚀 Getting Started
+
+To launch the manager, access your router via SSH and run:
+
+```bash
+/opt/bin/firewall_manager.sh
+```
+
+> **Note:** Ensure you are running as `root`. The script will automatically load your current configuration from `/opt/etc/firewall.conf`.
+
+---
+
+## 🎮 Main Menu Overview
+
+When you launch the manager, you will see the following options:
+
+### 📊 Monitoring & Stats
+* **1) Show Live Monitor:** Opens a real-time log viewer (`firewall_monitor`) showing blocked packets. Press `Ctrl+C` to exit.
+* **3) Run Stats & Dashboard:** Manually triggers the statistics engine (`firewall_stats.sh`). This updates the database and the JSON files used by the Web Dashboard. Useful if you want to see immediate changes on the UI.
+* **5) Run Abuse Reporter:** Manually triggers the reporting script to send recent attackers to AbuseIPDB (if API key is configured).
+
+### 🔄 Updates & Scanning
+* **2) Update Blocklists:** Downloads and refreshes the static IP blocklists (FirewallBlock) from the configured sources.
+* **4) Run VPN Scan:** Scans active VPN connections for blacklisted IPs and kicks them if found.
+
+### 🛠️ Operations
+* **6) Run Diagnostics:** Performs a system health check. It verifies if:
+    * ULOGD logger is running.
+    * Cron scheduler is active.
+    * Kernel modules (`xt_recent`) are loaded.
+    * IP Sets are populated (IPv4/IPv6).
+    * IPTables chains are correctly linked.
+* **7) Restart Firewall Hook:** Reloads the core firewall rules (`100-firewall.sh`) and applies the current configuration. Use this after manual changes to `.conf` files.
+* **9) Manage Whitelist:** Opens the [Whitelist Editor](#-whitelist-management).
+* **f) Flush Lists:** Opens the [Flush Menu](#-flush-cleaning) to clear specific lists immediately.
+
+---
+
+## ⚙️ Configuration (Option 8)
+
+The **Settings Menu (Option 8)** allows you to toggle features and tune parameters on the fly.
+
+### 🛡️ Security Modules
+* **IPv6 Support:** Toggles IPv6 firewall rules and blocklists.
+* **Forward Protection:** If **ON**, the AutoBan trap applies to traffic passing *through* the router (e.g., to a NAS).
+    * *Warning:* Ensure your Whitelist is configured before enabling this to avoid blocking legitimate services.
+* **AutoBan (Dynamic):** Toggles the "Honeypot" trap. If OFF, port scanners are logged but not banned.
+* **BruteForce Protection:** Toggles the `xt_recent` module to ban IPs attempting multiple connections in a short time.
+* **DDoS ConnLimit:** Limits the maximum simultaneous connections per source IP (Default: 15).
+
+### 🔧 Tuning & Parameters
+* **Auto-Ban Timeout:** Set how long an IP remains banned in the AutoBan list.
+    * Supports distinct values (e.g., `3600`) or `0` for Permanent Ban.
+    * *Feature:* Changing this applies immediately without a full firewall restart.
+* **Brute-Force Sensitivity:** Configure the threshold for banning.
+    * *Example:* 5 hits in 60 seconds.
+* **Allowed Ports:** Define which TCP/UDP ports are "Open" (Safe). Traffic to any port *not* in this list will trigger the AutoBan trap.
+* **AbuseIPDB Settings:** Configure your API Key and set the Reporting Cooldown (default 7 days) to avoid spamming reports.
+
+---
+
+## ✅ Whitelist Management
+
+Accessed via **Option 9**. Use this to prevent you or your services from being blocked.
+
+1.  **Add Entry (a):** Supports:
+    * Single IPs (`1.2.3.4`)
+    * Subnets/CIDR (`192.168.1.0/24`)
+    * Domains (`example.com`) - *Automatically resolves to both IPv4 and IPv6 IPs.*
+2.  **Remove Entry (r):** Delete a line from the whitelist.
+3.  **Apply (x):** **Crucial Step.** Reloads the whitelist into the running firewall immediately.
+
+---
+
+## 🗑️ Flush (Cleaning)
+
+Accessed via **Option f**. Use this if you accidentally banned yourself or need to clear lists.
+
+* **1) AutoBan:** Clears dynamic bans (Trap).
+* **2) FirewallBlock:** Clears downloaded static blocklists.
+* **3) VPNBlock:** Clears banned VPN IPs.
+* **4) Whitelist:** Clears the trusted list (use with caution).
+* **9) FLUSH ALL:** completely empties all IP sets.
+
+---
+
+## 📅 Automation (Cron)
+
+While `firewall_manager.sh` is for manual control, the system relies on `cron` for automation.
+**Recommended `crontab` setup** to avoid conflicts between updates and stats generation:
+
+```cron
+# Network Monitoring
+*/1 * * * * root /opt/bin/pingtool.sh >> /opt/var/log/connmon.log 2>&1
+
+# Stats Generation (Every 30 mins)
+*/30 * * * * root /opt/bin/firewall_stats.sh > /dev/null 2>&1
+
+# Blocklist Update (Once a day at 04:15 - Staggered to avoid conflict with stats)
+15 4 * * * root /opt/bin/update_blocklist.sh > /dev/null 2>&1
+
+# Security Scans
+15 * * * * root /opt/bin/vpn_scan.sh > /dev/null 2>&1
+45 * * * * root /opt/bin/abuse_reporter.sh > /dev/null 2>&1
+```
 
 ---
 
