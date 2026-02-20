@@ -1,10 +1,14 @@
 #!/bin/sh
 
 # ==============================================================================
-# ABUSEIPDB AUTO-REPORTER v2.1.1 (ULOGD/NFLOG EDITION)
+# ABUSEIPDB AUTO-REPORTER v2.1.2 (ULOGD/NFLOG EDITION)
 # ==============================================================================
 # Description: 
 #   Auto-reports malicious IPs to AbuseIPDB.
+#
+#   CHANGES v2.1.2:
+#     - API LIMIT: Truncates port lists in comments to a maximum of 200 chars 
+#       to prevent AbuseIPDB API 422 errors (1024 char limit on comments).
 #
 #   CHANGES v2.1.1 (Performance & Bugfix Update):
 #     - PERFORMANCE: Optimized SQLite JOINs (replaced OR chains with REPLACE()) 
@@ -64,7 +68,7 @@ if [ -f "$DB_FILE" ]; then
     sqlite3 "$DB_FILE" "CREATE TABLE IF NOT EXISTS abuse_reports (ip TEXT PRIMARY KEY, last_sent INTEGER);"
 fi
 
-logger -t "$LOG_TAG" "Starting Reporter v2.1.1"
+logger -t "$LOG_TAG" "Starting Reporter v2.1.2"
 
 # $1=IP, $2=Categories, $3=Comment, $4=Type
 send_report() {
@@ -160,6 +164,11 @@ process_critical_bruteforce() {
         # Fallback if ports empty
         [ -z "$PORTS" ] && PORTS="High-Risk Ports"
         
+        # API LIMIT FIX: Truncate ports string to max 200 chars
+        if [ ${#PORTS} -gt 200 ]; then
+            PORTS="$(echo "$PORTS" | cut -c 1-197)..."
+        fi
+        
         echo " -> Candidate: $IP (Ports: $PORTS | Hits: $CNT)"
         
         # EVIDENCE: "Blocked via Kernel/NFLOG"
@@ -202,6 +211,12 @@ process_random_scanners() {
         PORT=$(echo "$ROW" | cut -d'|' -f1)
         IP=$(echo "$ROW" | cut -d'|' -f2)
         CNT=$(echo "$ROW" | cut -d'|' -f3)
+        
+        # API LIMIT FIX: Truncate ports string to max 200 chars
+        if [ ${#PORT} -gt 200 ]; then
+            PORT="$(echo "$PORT" | cut -c 1-197)..."
+        fi
+        
         echo " -> Candidate: $IP (Ports: $PORT | Hits: $CNT)"
         # EVIDENCE: Explicitly mentions Kernel/NFLOG Block
 		MSG="Keenetic Firewall: Port Scanning detected on ports [$PORT]. Blocked via Kernel/NFLOG. ($CNT hits in 24h)."
