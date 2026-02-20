@@ -1,10 +1,16 @@
 #!/bin/sh
 
 # ==============================================================================
-# ABUSEIPDB AUTO-REPORTER v2.1.0 (ULOGD/NFLOG EDITION)
+# ABUSEIPDB AUTO-REPORTER v2.1.1 (ULOGD/NFLOG EDITION)
 # ==============================================================================
 # Description: 
 #   Auto-reports malicious IPs to AbuseIPDB.
+#
+#   CHANGES v2.1.1 (Performance & Bugfix Update):
+#     - PERFORMANCE: Optimized SQLite JOINs (replaced OR chains with REPLACE()) 
+#       to prevent EXT4 I/O lockups and 100% CPU spikes during table scans.
+#     - BUGFIX: Replaced Bash-specific IFS=$'\n' with POSIX/BusyBox compatible 
+#       newline parsing to fix silent string splitting errors.
 #
 #   CHANGES v2.1.0:
 #     - LOGIC: Uses ULOGD 'port_history' as primary evidence.
@@ -58,7 +64,7 @@ if [ -f "$DB_FILE" ]; then
     sqlite3 "$DB_FILE" "CREATE TABLE IF NOT EXISTS abuse_reports (ip TEXT PRIMARY KEY, last_sent INTEGER);"
 fi
 
-logger -t "$LOG_TAG" "Starting Reporter v2.0.14"
+logger -t "$LOG_TAG" "Starting Reporter v2.1.1"
 
 # $1=IP, $2=Categories, $3=Comment, $4=Type
 send_report() {
@@ -124,10 +130,10 @@ process_critical_bruteforce() {
     echo "--- Processing Targeted Bruteforce ($PROTO) ---"
     
     if [ -n "$TRAP_SQL_LIST" ]; then
-        # QUERY UPDATE: Fetch port_history directly
+        # QUERY UPDATE: Fetch port_history directly and optimized JOIN via REPLACE
         QUERY="SELECT IFNULL(i.port_history, i.target_port), d.ip, SUM(d.count) as total 
                FROM ip_drops d 
-               JOIN ip_info i ON (d.ip = i.ip OR d.ip = i.ip || '/128' OR d.ip = i.ip || '/32')
+               JOIN ip_info i ON i.ip = REPLACE(REPLACE(d.ip, '/128', ''), '/32', '')
                WHERE d.list_type='trap' 
                AND d.timestamp > $LIMIT_TIME
                AND (i.target_port IN ($TRAP_SQL_LIST) OR i.port_history LIKE '%/tcp%' OR i.port_history LIKE '%/udp%')
@@ -142,7 +148,10 @@ process_critical_bruteforce() {
 
     ROWS=$(sqlite3 -separator "|" "$DB_FILE" "$QUERY")
     
-    IFS=$'\n'
+    # BusyBox Compatible IFS for newlines
+    OIFS="$IFS"
+    IFS='
+'
     for ROW in $ROWS; do
         PORTS=$(echo "$ROW" | cut -d'|' -f1)
         IP=$(echo "$ROW" | cut -d'|' -f2)
@@ -159,7 +168,7 @@ process_critical_bruteforce() {
         # CATEGORIES: 15 (Hacking Attempt) + 14 (Port Scan)
         send_report "$IP" "15,14" "$MSG" "brute"
     done
-    unset IFS
+    IFS="$OIFS"
 }
 
 # ==============================================================================
@@ -171,10 +180,10 @@ process_random_scanners() {
 
     if [ -n "$TRAP_SQL_LIST" ]; then EXTRA_SQL="AND i.target_port NOT IN ($TRAP_SQL_LIST)"; else EXTRA_SQL=""; fi
 
-    # UPDATED: Selects port_history first, falls back to target_port
+    # UPDATED: Selects port_history first, falls back to target_port + optimized JOIN
     QUERY="SELECT IFNULL(i.port_history, i.target_port), d.ip, SUM(d.count) as total 
            FROM ip_drops d 
-           JOIN ip_info i ON (d.ip = i.ip OR d.ip = i.ip || '/128' OR d.ip = i.ip || '/32')
+           JOIN ip_info i ON i.ip = REPLACE(REPLACE(d.ip, '/128', ''), '/32', '')
            WHERE d.list_type='trap' 
            AND d.timestamp > $LIMIT_TIME
            AND d.ip LIKE '%$(if [ "$PROTO" = "v6" ]; then echo ":"; else echo "."; fi)%'
@@ -185,7 +194,10 @@ process_random_scanners() {
 
     ROWS=$(sqlite3 -separator "|" "$DB_FILE" "$QUERY")
 
-    IFS=$'\n'
+    # BusyBox Compatible IFS for newlines
+    OIFS="$IFS"
+    IFS='
+'
     for ROW in $ROWS; do
         PORT=$(echo "$ROW" | cut -d'|' -f1)
         IP=$(echo "$ROW" | cut -d'|' -f2)
@@ -195,7 +207,7 @@ process_random_scanners() {
 		MSG="Keenetic Firewall: Port Scanning detected on ports [$PORT]. Blocked via Kernel/NFLOG. ($CNT hits in 24h)."
 		send_report "$IP" "14" "$MSG" "scan"
     done
-    unset IFS
+    IFS="$OIFS"
 }
 
 # ==============================================================================
@@ -207,7 +219,7 @@ process_unknown_traffic() {
 
     QUERY="SELECT IFNULL(i.target_port, 0), d.ip, SUM(d.count) as total 
            FROM ip_drops d 
-           LEFT JOIN ip_info i ON (d.ip = i.ip OR d.ip = i.ip || '/128' OR d.ip = i.ip || '/32')
+           LEFT JOIN ip_info i ON i.ip = REPLACE(REPLACE(d.ip, '/128', ''), '/32', '')
            WHERE d.list_type='trap' 
            AND d.timestamp > $LIMIT_TIME
            AND d.ip LIKE '%$(if [ "$PROTO" = "v6" ]; then echo ":"; else echo "."; fi)%'
@@ -218,7 +230,10 @@ process_unknown_traffic() {
 
     ROWS=$(sqlite3 -separator "|" "$DB_FILE" "$QUERY")
 
-    IFS=$'\n'
+    # BusyBox Compatible IFS for newlines
+    OIFS="$IFS"
+    IFS='
+'
     for ROW in $ROWS; do
         PORT=$(echo "$ROW" | cut -d'|' -f1)
         IP=$(echo "$ROW" | cut -d'|' -f2)
@@ -226,7 +241,7 @@ process_unknown_traffic() {
         echo " -> Candidate: $IP (No Port Detected | Hits: $CNT)"
         send_report "$IP" "14" "Keenetic Firewall: Blocked Traffic (No Port Detected - likely UDP). Blocked $CNT times in last 24h." "udp"
     done
-    unset IFS
+    IFS="$OIFS"
 }
 
 # ==============================================================================
@@ -248,7 +263,10 @@ process_static() {
 
     ROWS=$(sqlite3 -separator "|" "$DB_FILE" "$QUERY")
 
-    IFS=$'\n'
+    # BusyBox Compatible IFS for newlines
+    OIFS="$IFS"
+    IFS='
+'
     for ROW in $ROWS; do
         IP=$(echo "$ROW" | cut -d'|' -f1)
         CNT=$(echo "$ROW" | cut -d'|' -f2)
@@ -257,7 +275,7 @@ process_static() {
 		MSG="Keenetic Firewall: Persistent traffic from Blacklisted IP. Blocked via Kernel/NFLOG. ($CNT hits in 24h)."
 		send_report "$IP" "14" "$MSG" "static"
     done
-    unset IFS
+    IFS="$OIFS"
 }
 
 # ==============================================================================
@@ -275,7 +293,10 @@ process_subnets() {
 
     ROWS=$(sqlite3 -separator "|" "$DB_FILE" "$QUERY")
 
-    IFS=$'\n'
+    # BusyBox Compatible IFS for newlines
+    OIFS="$IFS"
+    IFS='
+'
     for ROW in $ROWS; do
         SUBNET=$(echo "$ROW" | cut -d'|' -f1)
         CNT=$(echo "$ROW" | cut -d'|' -f2)
@@ -283,7 +304,7 @@ process_subnets() {
         echo " -> Candidate: $SUBNET (Hits: $CNT)"
         send_report "$CLEAN_IP" "14,4" "Keenetic Firewall Subnet Block: Entire subnet $SUBNET blocked ($CNT hits in 24h). Reporting network ID." "net"
     done
-    unset IFS
+    IFS="$OIFS"
 }
 
 # ==============================================================================
