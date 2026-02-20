@@ -1,13 +1,14 @@
 #!/bin/sh
 
 # ==============================================================================
-# KEENETIC FIREWALL STATS v3.5.1 (EMAIL INTEGRATION)
+# KEENETIC FIREWALL STATS v3.5.3 (EMAIL INTEGRATION)
 # ==============================================================================
 # AUTHOR: mattheweli
 # DESCRIPTION: 
 #   Aggregates firewall statistics, parses sniffer data for port mapping,
 #   and generates JSON data for the web dashboard.
-#   
+#
+#	  - NEW: Database and sniffer analysis optimized   
 #     - NEW: Added email reporting module
 #     - FIX: WAN sniffer process optimized
 #     - OPT: Limited tooltip port list in JS to max 20 entries to reduce file size.
@@ -93,19 +94,22 @@ NOW=$($DATE_CMD +%s)
 NEW_DROPS_V4=0; NEW_DROPS_V6=0; NEW_DROPS_VPN=0; NEW_DROPS_TRAP=0; NEW_DROPS_TRAP6=0
 NEW_IP_RECORDS=0
 
-echo "=== Firewall Stats Updater v3.4.25 ==="
+echo "=== Firewall Stats Updater v3.5.3 ==="
 
 # ==============================================================================
-# 3. DATABASE INITIALIZATION
+# 3. DATABASE INITIALIZATION & TUNING
 # ==============================================================================
+# Abilita ottimizzazioni SQLite ad alte prestazioni (WAL mode, memory temp store)
+sqlite3 "$DB_FILE" "PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA temp_store = MEMORY;"
+
 if [ ! -f "$DB_FILE" ]; then
     echo " -> Initializing Database Schema..."
     # Table: drops (Global counters history)
     sqlite3 "$DB_FILE" "CREATE TABLE drops (id INTEGER PRIMARY KEY, timestamp INTEGER, list_name TEXT, count INTEGER); CREATE INDEX idx_ts ON drops(timestamp);"
     # Table: ip_drops (Individual IP hit events)
-    sqlite3 "$DB_FILE" "CREATE TABLE ip_drops (timestamp INTEGER, ip TEXT, count INTEGER, list_type TEXT); CREATE INDEX idx_ip_ts ON ip_drops(timestamp); CREATE INDEX idx_list ON ip_drops(list_type);"
+    sqlite3 "$DB_FILE" "CREATE TABLE ip_drops (timestamp INTEGER, ip TEXT, count INTEGER, list_type TEXT); CREATE INDEX idx_ip_ts ON ip_drops(timestamp); CREATE INDEX idx_list ON ip_drops(list_type); CREATE INDEX idx_ip ON ip_drops(ip);"
     # Table: ip_info (Geo-data, Risk Score, Domain)
-    sqlite3 "$DB_FILE" "CREATE TABLE ip_info (ip TEXT PRIMARY KEY, country TEXT, risk INTEGER, domain TEXT, updated INTEGER, target_port INTEGER, port_history TEXT);"
+    sqlite3 "$DB_FILE" "CREATE TABLE ip_info (ip TEXT PRIMARY KEY, country TEXT, risk INTEGER, domain TEXT, updated INTEGER, target_port INTEGER, port_history TEXT); CREATE INDEX idx_port ON ip_info(target_port);"
 else
     # --- MIGRATION CHECKS ---
     
@@ -129,6 +133,19 @@ else
     if [ -z "$HAS_HIST" ]; then
         echo " -> Migrating DB: Adding port_history column..."
         sqlite3 "$DB_FILE" "ALTER TABLE ip_info ADD COLUMN port_history TEXT;"
+    fi
+    
+    # 4. Check for Performance Indexes (CPU 100% Fix)
+    HAS_IDX_IP=$(sqlite3 "$DB_FILE" "PRAGMA index_list('ip_drops');" | grep "idx_ip")
+    if [ -z "$HAS_IDX_IP" ]; then
+        echo " -> Migrating DB: Adding performance index idx_ip..."
+        sqlite3 "$DB_FILE" "CREATE INDEX IF NOT EXISTS idx_ip ON ip_drops(ip);"
+    fi
+
+    HAS_IDX_PORT=$(sqlite3 "$DB_FILE" "PRAGMA index_list('ip_info');" | grep "idx_port")
+    if [ -z "$HAS_IDX_PORT" ]; then
+        echo " -> Migrating DB: Adding performance index idx_port..."
+        sqlite3 "$DB_FILE" "CREATE INDEX IF NOT EXISTS idx_port ON ip_info(target_port);"
     fi
 fi
 
@@ -272,26 +289,32 @@ fi
 rm "$CURRENT_DUMP" "$SQL_IMPORT" 2>/dev/null
 
 # ==============================================================================
-# 8. SNIFFER PARSER (OPTIMIZED: DEDUP-FIRST STRATEGY)
+# 8. SNIFFER PARSER (ULTRA-OPTIMIZED: INCREMENTAL + SELECTIVE DB CACHE)
 # ==============================================================================
 PCAP_BASE="/tmp/fw_syn_ring.pcap"
 DB_CACHE="/tmp/fw_db_cache.dat"
 UNIQUE_TRAFFIC="/tmp/fw_unique_traffic.dat"
+LAST_TS_FILE="/tmp/fw_pcap_last_ts.dat"
+ACTIVE_IPS="/tmp/fw_active_ips.dat"
+
 LOG_BUFFER=$(ls ${PCAP_BASE}* 2>/dev/null | head -n 1)
 
 if [ -n "$LOG_BUFFER" ] && [ -s "$LOG_BUFFER" ]; then
-    echo " -> 🕵️ Processing WAN Sniffer Buffer..."
+    echo " -> 🕵️ Processing WAN Sniffer Buffer (Incremental)..."
     
-    # 1. Dump DB Cache (IP | Existing_History)
-    # Stiamo leggendo solo le colonne necessarie per velocizzare
-    sqlite3 -separator "|" "$DB_FILE" "SELECT d.ip, IFNULL(i.port_history, '') FROM ip_drops d LEFT JOIN ip_info i ON d.ip=i.ip GROUP BY d.ip;" > "$DB_CACHE"
-    BLOCKED_COUNT=$(wc -l < "$DB_CACHE")
-
-    # 2. PHASE 1: Parse PCAP & Deduplicate (The Speed Boost)
-    # Invece di incrociare i dati subito, estraiamo solo IP/PORTA/PROTO e usiamo 'sort -u'
-    # Questo collassa 1000 pacchetti di scan in 1 singola riga da elaborare.
-    tcpdump -r "$LOG_BUFFER" -nn 2>/dev/null | awk '
+    # 1. Retrieve last analyzed timestamp (Memory State)
+    if [ -f "$LAST_TS_FILE" ]; then LAST_TS=$(cat "$LAST_TS_FILE"); else LAST_TS=0; fi
+    
+    # 2. PHASE 1: Parse PCAP & Deduplicate (Only NEW packets)
+    # We use tcpdump with -tt to get exact epoch timestamps.
+    # Awk immediately discards packets with timestamp <= the last run.
+    tcpdump -tt -r "$LOG_BUFFER" -nn 2>/dev/null | awk -v last_ts="$LAST_TS" '
+    BEGIN { max_ts = last_ts + 0; }
     {
+        current_ts = $1 + 0; # Convert timestamp to numeric format (float)
+        if (current_ts <= last_ts) next; # SKIP OLD PACKETS!
+        if (current_ts > max_ts) max_ts = current_ts;
+        
         # Robust Arrow Detection (SLL/Ethernet safe)
         arrow_idx = 0;
         for (i=1; i<=NF; i++) { if ($i == ">") { arrow_idx = i; break; } }
@@ -320,77 +343,81 @@ if [ -n "$LOG_BUFFER" ] && [ -s "$LOG_BUFFER" ]; then
                 print ip "|" port_str "|" proto
             }
         }
+    }
+    END { 
+        # Save the new time limit for the next run
+        print max_ts > "'"$LAST_TS_FILE"'" 
     }' | sort -u > "$UNIQUE_TRAFFIC"
 
     TRAFFIC_COUNT=$(wc -l < "$UNIQUE_TRAFFIC")
-    echo "    [DEBUG] Condensed traffic into $TRAFFIC_COUNT unique flows."
-
-    # 3. PHASE 2: Cross-Reference & Generate SQL
-    # Ora carichiamo in AWK solo le poche righe di traffico unico (molto veloce)
-    # e le confrontiamo con il DB (streaming).
     
-    echo "BEGIN TRANSACTION;" > /tmp/port_update.sql
-    
-    awk -F"|" -v now="$NOW" '
-    FNR==NR {
-        # FILE 1: Unique Traffic (Small) -> Load into RAM
-        # arr[IP] = "port/proto,port/proto..."
-        key = $1
-        val = $2 "/" $3
-        if (traffic[key] == "") { traffic[key] = val } 
-        else { traffic[key] = traffic[key] "," val }
-        next
-    }
-    {
-        # FILE 2: DB Cache (Large) -> Stream Process
-        # $1 = IP, $2 = Current History
-        db_ip = $1
-        db_hist = $2
+    if [ "$TRAFFIC_COUNT" -gt 0 ]; then
+        echo "    [DEBUG] Found $TRAFFIC_COUNT new unique flows."
         
-        if (db_ip in traffic) {
-            # Hit! The blocked IP was found in the sniffer logs
-            new_entries = traffic[db_ip]
-            split(new_entries, candidates, ",")
+        # 3. PHASE 2: SELECTIVE DB CACHE (Load only necessary IPs)
+        # Extract fresh IPs from the newly parsed traffic
+        awk -F"|" '{print $1}' "$UNIQUE_TRAFFIC" | sort -u > "$ACTIVE_IPS"
+        
+        # Create a temporary table in SQLite to extract ONLY the history of those active IPs
+        echo "CREATE TEMP TABLE active_ips (ip TEXT PRIMARY KEY);" > /tmp/query.sql
+        awk '{print "INSERT INTO active_ips VALUES (\047" $1 "\047);"}' "$ACTIVE_IPS" >> /tmp/query.sql
+        
+        # [CPU FIX: Rimosso il JOIN mostruoso con ip_drops, query istantanea]
+        echo "SELECT a.ip, IFNULL(i.port_history, '') FROM active_ips a LEFT JOIN ip_info i ON a.ip = i.ip;" >> /tmp/query.sql
+        
+        sqlite3 -separator "|" "$DB_FILE" < /tmp/query.sql > "$DB_CACHE"
+        
+        # 4. PHASE 3: Cross-Reference & Generate SQL for the update
+        echo "BEGIN TRANSACTION;" > /tmp/port_update.sql
+        
+        awk -F"|" -v now="$NOW" '
+        FNR==NR {
+            key = $1; val = $2 "/" $3;
+            if (traffic[key] == "") { traffic[key] = val } 
+            else { traffic[key] = traffic[key] "," val }
+            next
+        }
+        {
+            db_ip = $1; db_hist = $2;
             
-            is_modified = 0
-            final_hist = db_hist
-            last_port = 0
-            
-            for (i in candidates) {
-                cand = candidates[i]
-                split(cand, p, "/") # p[1]=port
+            if (db_ip in traffic) {
+                new_entries = traffic[db_ip]
+                split(new_entries, candidates, ",")
                 
-                # Check for duplicate in existing history
-                if (index(final_hist, cand) == 0) {
-                    if (final_hist == "") { final_hist = cand }
-                    else { final_hist = final_hist "," cand }
-                    is_modified = 1
-                    last_port = p[1]
-                } else {
-                    # Even if present, update timestamp/last_port
-                    last_port = p[1]
-                    is_modified = 1 
+                is_modified = 0; final_hist = db_hist; last_port = 0;
+                
+                for (i in candidates) {
+                    cand = candidates[i]
+                    split(cand, p, "/")
+                    
+                    if (index(final_hist, cand) == 0) {
+                        if (final_hist == "") { final_hist = cand }
+                        else { final_hist = final_hist "," cand }
+                        is_modified = 1; last_port = p[1];
+                    } else {
+                        last_port = p[1]; is_modified = 1; 
+                    }
+                }
+                
+                if (is_modified) {
+                    printf "UPDATE ip_info SET target_port=%s, port_history=\047%s\047, updated=%d WHERE ip=\047%s\047;\n", last_port, final_hist, now, db_ip;
+                    updates++
                 }
             }
-            
-            if (is_modified) {
-                printf "UPDATE ip_info SET target_port=%s, port_history=\047%s\047, updated=%d WHERE ip=\047%s\047;\n", last_port, final_hist, now, db_ip;
-                updates++
-            }
         }
-    }
-    END { 
-        print "    [DEBUG] Matched & Updated " (updates+0) " records." > "/dev/stderr"; 
-    }
-    ' "$UNIQUE_TRAFFIC" "$DB_CACHE" >> /tmp/port_update.sql
-    
-    echo "COMMIT;" >> /tmp/port_update.sql
+        END { print "    [DEBUG] Updated " (updates+0) " DB records." > "/dev/stderr"; }
+        ' "$UNIQUE_TRAFFIC" "$DB_CACHE" >> /tmp/port_update.sql
+        
+        echo "COMMIT;" >> /tmp/port_update.sql
 
-    # 4. Execute
-    sqlite3 "$DB_FILE" < /tmp/port_update.sql
+        # 5. Execute the database update
+        sqlite3 "$DB_FILE" < /tmp/port_update.sql
+    else
+        echo "    [DEBUG] No new traffic since last run."
+    fi
     
-    # Cleanup
-    rm "/tmp/port_update.sql" "$DB_CACHE" "$UNIQUE_TRAFFIC" 2>/dev/null
+    # Cleanup temporary files
+    rm -f "/tmp/port_update.sql" "$DB_CACHE" "$UNIQUE_TRAFFIC" "$ACTIVE_IPS" "/tmp/query.sql" 2>/dev/null
 else
     echo " -> 🕵️ Buffer empty or missing."
 fi
@@ -419,12 +446,21 @@ get_avg() {
 # Function: Generate IP Tables (Pure DB Data)
 get_ip_table() {
     WHERE=$1; TYPE=$2
-    QUERY="SELECT d.ip, SUM(d.count) as total, i.country, i.risk, i.domain, i.target_port, d.list_type, i.port_history 
-           FROM ip_drops d 
+    
+    # [CPU FIX: Aggrega i Top 10 PRIMA di fare il JOIN con le stringhe geografiche]
+    QUERY="SELECT sub.ip, sub.total, i.country, i.risk, i.domain, i.target_port, sub.list_type, i.port_history 
+           FROM (
+               SELECT ip, SUM(count) as total, list_type 
+               FROM ip_drops 
+               WHERE $WHERE 
+               GROUP BY ip 
+               ORDER BY total DESC 
+               LIMIT 10
+           ) sub 
            LEFT JOIN ip_info i ON (
-               CASE WHEN INSTR(d.ip, '/') > 0 THEN SUBSTR(d.ip, 1, INSTR(d.ip, '/') - 1) ELSE d.ip END = i.ip
+               CASE WHEN INSTR(sub.ip, '/') > 0 THEN SUBSTR(sub.ip, 1, INSTR(sub.ip, '/') - 1) ELSE sub.ip END = i.ip
            ) 
-           WHERE $WHERE GROUP BY d.ip ORDER BY total DESC LIMIT 10;"
+           ORDER BY sub.total DESC;"
     
     sqlite3 -separator "|" "$DB_FILE" "$QUERY" | while IFS='|' read -r IP COUNT CO SC DO PORT TYPE PHIST; do
         CLEAN_IP=$(echo "$IP" | cut -d'/' -f1)
@@ -640,18 +676,51 @@ mv "$TEMP_DATA_FILE" "$DATA_FILE"
 chmod 644 "$DATA_FILE"
 
 # ==============================================================================
-# 10. SMART MAINTENANCE & PERSISTENCE
+# 10. SMART MAINTENANCE & PERSISTENCE (LOSSLESS COMPRESSION)
 # ==============================================================================
-echo " -> Smart Database Cleaning..."
-LIMIT_HARD=$((NOW - 2592000))
-sqlite3 "$DB_FILE" "DELETE FROM ip_drops WHERE timestamp < $LIMIT_HARD;"
-LIMIT_SOFT=$((NOW - 604800))
-sqlite3 "$DB_FILE" "DELETE FROM ip_drops WHERE timestamp < $LIMIT_SOFT AND count < 10;"
-# sqlite3 "$DB_FILE" "DELETE FROM ip_info WHERE ip NOT IN (SELECT DISTINCT ip FROM ip_drops);"
-sqlite3 "$DB_FILE" "VACUUM;"
+echo " -> Smart Database Lossless Compression..."
+
+# Definisci le soglie temporali (Protegge rigorosamente le ultime 24 ore per i grafici orari!)
+YESTERDAY=$((NOW - 86400))
+THIRTY_DAYS=$((NOW - 2592000))
+
+sqlite3 "$DB_FILE" "
+BEGIN TRANSACTION;
+
+-- 1. ROLLUP GLOBAL DROPS (Ad Infinitum compression)
+-- Fonde i dati vecchi di 24h. Posiziona il timestamp fuso alle 12:00 UTC per evitare salti di fuso orario.
+CREATE TEMP TABLE IF NOT EXISTS drops_rollup AS 
+    SELECT ((timestamp / 86400) * 86400) + 43200 AS day_ts, list_name, SUM(count) AS total_count 
+    FROM drops 
+    WHERE timestamp < $YESTERDAY 
+    GROUP BY (timestamp / 86400), list_name;
+DELETE FROM drops WHERE timestamp < $YESTERDAY;
+INSERT INTO drops (timestamp, list_name, count) 
+    SELECT day_ts, list_name, total_count FROM drops_rollup;
+DROP TABLE drops_rollup;
+
+-- 2. ROLLUP IP DROPS (Preserve dashboard 1y/All-Time data)
+-- Fonde gli attacchi dello stesso IP. Protegge le ultime 24h in modo assoluto.
+CREATE TEMP TABLE IF NOT EXISTS ip_drops_rollup AS 
+    SELECT ((timestamp / 86400) * 86400) + 43200 AS day_ts, ip, SUM(count) AS total_count, list_type 
+    FROM ip_drops 
+    WHERE timestamp < $YESTERDAY 
+    GROUP BY (timestamp / 86400), ip, list_type;
+DELETE FROM ip_drops WHERE timestamp < $YESTERDAY;
+INSERT INTO ip_drops (timestamp, ip, count, list_type) 
+    SELECT day_ts, ip, total_count, list_type FROM ip_drops_rollup;
+DROP TABLE ip_drops_rollup;
+
+-- 3. NOISE REDUCTION (Optional Garbage Collection)
+-- Rimuove dal database gli IP 'fantasma' (es. un singolo ping isolato) più vecchi di 30 giorni
+DELETE FROM ip_drops WHERE timestamp < $THIRTY_DAYS AND count <= 3;
+
+COMMIT;
+VACUUM;
+"
 
 DB_SIZE_H=$(du -h "$DB_FILE" 2>/dev/null | awk '{print $1}')
-echo " -> DB Optimized. Size: $DB_SIZE_H"
+echo " -> DB Optimized & Compressed. New Size: $DB_SIZE_H"
 
 # SAVE IPSETS TO DISK (Auto-Save)
 echo " -> Saving AutoBan states..."
