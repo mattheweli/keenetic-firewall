@@ -1,20 +1,17 @@
 #!/bin/sh
 
 # ==============================================================================
-# KEENETIC FIREWALL MANAGER v2.4.5 (FWD PROTECTION)
+# KEENETIC FIREWALL MANAGER v2.5.0 (GRANULAR BYPASS WIZARD)
 # Changelog:
-#   - FIX: Missing flush function menu
-#   - FIX: AutoBan list swapped when timeout change 
-#   - UX: Improved Port manager handling
-#   - FIX: Updated Diagnostic engine 
-#   - FEAT: Toggle for AutoBan (Dynamic Blacklisting).
-#   - FEAT: Toggle for BruteForce Protection (xt_recent).
-#   - FEAT: Toggle & Config for DDoS Protection (xt_connlimit).
-#   - UX: "Flush on Disable" logic for AutoBan.
+#   - FEAT: Introduced Granular Port Whitelisting (Sub-chain Architecture).
+#   - FEAT: Interactive Port Wizard to bypass AutoBan, ConnLimit or BruteForce independently.
+#   - UX: Settings are automatically applied on exiting the config menu (Option 0).
+#   - FIX: Restored missing core UI functions (show_header, pause, whitelist_menu).
+#   - FIX: AutoBan list swapped safely when timeout changes (Atomic Swap).
+#   - FEAT: Toggle & Config for DDoS Protection (xt_connlimit) extended to UDP.
 #   - OPS: Dedicated Menu for Flushing specific IP Sets.
-#   - FWD: Added toggle for Forward Chain Protection (NAS/DMZ).
-#   - REPORTER: Added configuration for AbuseIPDB Reporting Cooldown.
-#   - UX: Grouped API Key and Cooldown under "AbuseIPDB Settings".
+#   - FWD: Toggle for Forward Chain Protection (NAS/DMZ).
+#   - REPORTER: Configuration for AbuseIPDB Reporting Cooldown.
 # ==============================================================================
 
 export PATH=/opt/bin:/opt/sbin:/usr/bin:/usr/sbin:/bin:/sbin
@@ -57,10 +54,23 @@ trap ctrl_c_handler INT
 RED='\033[0;31m'; GREEN='\033[1;32m'; YELLOW='\033[1;33m'; BLUE='\033[1;34m'; CYAN='\033[1;36m'; WHITE='\033[1;37m'; NC='\033[0m'
 BOLD='\033[1m'; DIM='\033[2m'
 
+# --- UI HELPERS ---
+show_header() {
+    clear
+    echo -e "${BLUE}=================================================${NC}"
+    echo -e "${BOLD}🛡️  KEENETIC FIREWALL MANAGER v2.5.0${NC}"
+    echo -e "${BLUE}=================================================${NC}"
+}
+
+pause() {
+    echo -e "\n${DIM}Press [Enter] to continue...${NC}"
+    read -r _
+}
+
 # --- HELPER: TIME CALCULATOR ---
 calculate_seconds() {
     MODE=$1
-    # Inviamo i testi descrittivi a stderr (> &2) per vederli a schermo
+    # Send descriptive text to stderr so it displays on screen but isn't captured by the variable
     echo -e "${YELLOW}--- TIME DURATION CALCULATOR ---${NC}" >&2
     echo -e "${DIM}Leave empty or 0 to skip a unit.${NC}" >&2
     
@@ -76,7 +86,7 @@ calculate_seconds() {
     echo -n "  Minutes: " >&2; read -r in_m; m=${in_m:-0}
     echo -n "  Seconds: " >&2; read -r in_s; s=${in_s:-0}
     
-    # Validation
+    # Validation (numbers only)
     M=$(echo "$M" | tr -cd '0-9'); [ -z "$M" ] && M=0
     W=$(echo "$W" | tr -cd '0-9'); [ -z "$W" ] && W=0
     D=$(echo "$D" | tr -cd '0-9'); [ -z "$D" ] && D=0
@@ -87,42 +97,40 @@ calculate_seconds() {
     # Calculation
     TOTAL=$(( (M * 2592000) + (W * 604800) + (D * 86400) + (H * 3600) + (m * 60) + s ))
     
-    # SOLO il risultato finale va su stdout per essere catturato dalla variabile
+    # ONLY the final result goes to stdout to be captured
     echo "$TOTAL"
 }
 
 # --- CONFIG ENGINE ---
 load_config() {
-    # If configuration file doesn't exist, create it with default values
     if [ ! -f "$CONF_FILE" ]; then
         echo "Generating default configuration file..."
         echo "ENABLE_IPV6=\"$DEF_IPV6\"" > "$CONF_FILE"
         echo "ENABLE_FWD_PROTECTION=\"$DEF_FWD_PROT\"" >> "$CONF_FILE"
-        
-        # New Security Modules
         echo "ENABLE_AUTOBAN=\"$DEF_ENABLE_AUTOBAN\"" >> "$CONF_FILE"
         echo "ENABLE_BRUTEFORCE=\"$DEF_ENABLE_BF\"" >> "$CONF_FILE"
         echo "ENABLE_CONNLIMIT=\"$DEF_ENABLE_CONN\"" >> "$CONF_FILE"
         echo "CONNLIMIT_MAX=\"$DEF_CONN_MAX\"" >> "$CONF_FILE"
-        
-        # Standard Parameters
         echo "BAN_TIMEOUT=\"$DEF_BAN_TIME\"" >> "$CONF_FILE"
         echo "TCP_SERVICES=\"$DEF_TCP\"" >> "$CONF_FILE"
         echo "UDP_SERVICES=\"$DEF_UDP\"" >> "$CONF_FILE"
+        
+        # Granular Bypass Lists
+        echo "BYPASS_CONN_TCP=\"\"" >> "$CONF_FILE"
+        echo "BYPASS_CONN_UDP=\"\"" >> "$CONF_FILE"
+        echo "BYPASS_BRUTE_TCP=\"\"" >> "$CONF_FILE"
+        echo "BYPASS_BRUTE_UDP=\"\"" >> "$CONF_FILE"
+        
         echo "TCP_PASSIVE_RANGE=\"$DEF_PASSIVE\"" >> "$CONF_FILE"
         echo "BF_SECONDS=\"$DEF_BF_SEC\"" >> "$CONF_FILE"
         echo "BF_HITCOUNT=\"$DEF_BF_HIT\"" >> "$CONF_FILE"
         echo "REPORT_COOLDOWN=\"$DEF_REP_COOL\"" >> "$CONF_FILE"
-        
-        # Blocklist Sources (Required for update_blocklist.sh)
         echo "SOURCES_V4=\"$L4_DEFAULTS\"" >> "$CONF_FILE"
         echo "SOURCES_V6=\"$L6_DEFAULTS\"" >> "$CONF_FILE"
     fi
     
-    # Load configuration from file
     . "$CONF_FILE"
     
-    # Memory Fallback (Safety check: if variable missing in file, use default)
     : ${ENABLE_IPV6:=$DEF_IPV6}
     : ${ENABLE_FWD_PROTECTION:=$DEF_FWD_PROT}
     : ${ENABLE_AUTOBAN:=$DEF_ENABLE_AUTOBAN}
@@ -130,8 +138,17 @@ load_config() {
     : ${ENABLE_CONNLIMIT:=$DEF_ENABLE_CONN}
     : ${CONNLIMIT_MAX:=$DEF_CONN_MAX}
     : ${BAN_TIMEOUT:=$DEF_BAN_TIME}
+    
+    # AutoBan Safe Ports
     : ${TCP_SERVICES:=$DEF_TCP}
     : ${UDP_SERVICES:=$DEF_UDP}
+    
+    # Granular Bypass Fallbacks
+    : ${BYPASS_CONN_TCP:=""}
+    : ${BYPASS_CONN_UDP:=""}
+    : ${BYPASS_BRUTE_TCP:=""}
+    : ${BYPASS_BRUTE_UDP:=""}
+    
     : ${TCP_PASSIVE_RANGE:=$DEF_PASSIVE}
     : ${BF_SECONDS:=$DEF_BF_SEC}
     : ${BF_HITCOUNT:=$DEF_BF_HIT}
@@ -145,245 +162,119 @@ load_config() {
 save_config() {
     echo "ENABLE_IPV6=\"$ENABLE_IPV6\"" > "$CONF_FILE"
     echo "ENABLE_FWD_PROTECTION=\"$ENABLE_FWD_PROTECTION\"" >> "$CONF_FILE"
+    
+    # [FIX] Aggiunte le variabili dei moduli di sicurezza e del limite connessioni
+    echo "ENABLE_AUTOBAN=\"$ENABLE_AUTOBAN\"" >> "$CONF_FILE"
+    echo "ENABLE_BRUTEFORCE=\"$ENABLE_BRUTEFORCE\"" >> "$CONF_FILE"
+    echo "ENABLE_CONNLIMIT=\"$ENABLE_CONNLIMIT\"" >> "$CONF_FILE"
+    echo "CONNLIMIT_MAX=\"$CONNLIMIT_MAX\"" >> "$CONF_FILE"
+    
     echo "BAN_TIMEOUT=\"$BAN_TIMEOUT\"" >> "$CONF_FILE"
     echo "TCP_SERVICES=\"$TCP_SERVICES\"" >> "$CONF_FILE"
     echo "UDP_SERVICES=\"$UDP_SERVICES\"" >> "$CONF_FILE"
+    
+    echo "BYPASS_CONN_TCP=\"$BYPASS_CONN_TCP\"" >> "$CONF_FILE"
+    echo "BYPASS_CONN_UDP=\"$BYPASS_CONN_UDP\"" >> "$CONF_FILE"
+    echo "BYPASS_BRUTE_TCP=\"$BYPASS_BRUTE_TCP\"" >> "$CONF_FILE"
+    echo "BYPASS_BRUTE_UDP=\"$BYPASS_BRUTE_UDP\"" >> "$CONF_FILE"
+    
     echo "TCP_PASSIVE_RANGE=\"$TCP_PASSIVE_RANGE\"" >> "$CONF_FILE"
     echo "BF_SECONDS=\"$BF_SECONDS\"" >> "$CONF_FILE"
     echo "BF_HITCOUNT=\"$BF_HITCOUNT\"" >> "$CONF_FILE"
-    # [NEW] Save Report Cooldown
     echo "REPORT_COOLDOWN=\"$REPORT_COOLDOWN\"" >> "$CONF_FILE"
     echo "SOURCES_V4=\"$SOURCES_V4\"" >> "$CONF_FILE"
     echo "SOURCES_V6=\"$SOURCES_V6\"" >> "$CONF_FILE"
 }
 
-# --- MENUS ---
-show_header() {
-    clear
-    echo -e "${CYAN}=================================================${NC}"
-    echo -e "${WHITE}      KEENETIC FIREWALL MANAGER v2.4.5      ${NC}"
-    echo -e "${CYAN}=================================================${NC}"
-}
+# --- PORT EDITOR (GRANULAR BYPASS) ---
 
-pause() { echo ""; echo -e "${CYAN}Press [Enter] to continue...${NC}"; read -r; }
-
-# --- WHITELIST MANAGER ---
-do_whitelist_menu() {
-    while true; do
-        show_header
-        echo -e "${YELLOW}--- MANAGE WHITELIST (Trust List) ---${NC}"
-        echo -e "${DIM}IPs (v4/v6), Subnets, or Domains here bypass ALL blocks.${NC}"
-        echo -e "${DIM}Domains are resolved to both IPv4 and IPv6 automatically.${NC}\n"
-        
-        if [ -s "$WHITELIST_FILE" ]; then
-            awk '{print NR")", $0}' "$WHITELIST_FILE"
-        else
-            echo -e "${DIM}(Whitelist is empty)${NC}"
-        fi
-        
-        echo -e "\n a) Add Entry (IP, IPv6, CIDR, Domain)"
-        echo -e " r) Remove Entry"
-        echo -e " x) ${GREEN}APPLY & RESOLVE${NC} (Load into Firewall)"
-        echo -e " 0) Back"
-        echo ""
-        echo -n "Select option: "
-        read -r WOPT
-        case $WOPT in
-            a)
-                echo -e "\nEnter IP (1.2.3.4), IPv6 (2001::1), Subnet or Domain:"
-                read -r NEW_ENTRY
-                if [ -n "$NEW_ENTRY" ]; then
-                    echo "$NEW_ENTRY" >> "$WHITELIST_FILE"
-                    echo -e "${GREEN}Entry added. Remember to APPLY (x).${NC}"
-                    sleep 1
-                fi
-                ;;
-            r)
-                echo -n "Enter line number to remove: "
-                read -r DEL_NUM
-                if [ -n "$DEL_NUM" ] && echo "$DEL_NUM" | grep -qE '^[0-9]+$'; then
-                    sed -i "${DEL_NUM}d" "$WHITELIST_FILE"
-                    echo -e "${RED}Removed.${NC}"
-                    sleep 1
-                fi
-                ;;
-            x)
-                do_apply_whitelist
-                pause
-                ;;
-            0) return ;;
-        esac
+# Helper function to toggle a port in a space-separated list safely
+toggle_port() {
+    local current_list="$1"
+    local port="$2"
+    local new_list=""
+    local found=0
+    for p in $current_list; do
+        if [ "$p" = "$port" ]; then found=1; else new_list="$new_list $p"; fi
     done
+    if [ "$found" -eq 0 ]; then new_list="$current_list $port"; fi
+    echo $new_list # Outputs clean space-separated list
 }
 
-do_apply_whitelist() {
-    echo -e "\n${YELLOW}Applying Whitelist & Resolving Domains...${NC}"
-    ipset flush FirewallWhite 2>/dev/null || ipset create FirewallWhite hash:net maxelem 65536
-    if [ "$ENABLE_IPV6" = "true" ]; then
-        ipset flush FirewallWhite6 2>/dev/null || ipset create FirewallWhite6 hash:net family inet6 maxelem 65536
-    fi
-    while read -r LINE; do
-        [ -z "$LINE" ] && continue
-        [[ "$LINE" =~ ^#.* ]] && continue
-        if echo "$LINE" | grep -qE '[a-zA-Z]' && ! echo "$LINE" | grep -q ":"; then
-            echo -e " -> Resolving Domain: ${CYAN}$LINE${NC}..."
-            IPS_V4=$(nslookup "$LINE" 2>/dev/null | awk '/^Address 1: / { print $3 }' | grep -E '^[0-9]')
-            if [ -z "$IPS_V4" ]; then IPS_V4=$(nslookup "$LINE" 2>/dev/null | grep "Address:" | grep -v "#53" | awk '{print $2}' | grep -E '^[0-9]'); fi
-            for ip in $IPS_V4; do echo "    + IPv4: $ip"; ipset add FirewallWhite "$ip" -exist; done
-            if [ "$ENABLE_IPV6" = "true" ]; then
-                IPS_V6=$(nslookup -type=AAAA "$LINE" 2>/dev/null | grep "Address:" | grep -v "#53" | awk '{print $3$4}' | grep ":"); 
-                for ip in $IPS_V6; do echo "    + IPv6: $ip"; ipset add FirewallWhite6 "$ip" -exist; done
-            fi
-        else
-            if echo "$LINE" | grep -q ":"; then
-                if [ "$ENABLE_IPV6" = "true" ]; then echo -e " -> Adding IPv6: ${GREEN}$LINE${NC}"; ipset add FirewallWhite6 "$LINE" -exist; fi
-            else
-                echo -e " -> Adding IPv4: ${GREEN}$LINE${NC}"; ipset add FirewallWhite "$LINE" -exist
-            fi
-        fi
-    done < "$WHITELIST_FILE"
-    echo -e "${GREEN}Whitelist Applied Successfully.${NC}"
-}
+do_port_wizard() {
+    echo -e "\nEnter Port Number (e.g. 32400):"
+    read -r W_PORT
+    if ! echo "$W_PORT" | grep -qE '^[0-9]+$'; then echo -e "${RED}Invalid port${NC}"; sleep 1; return; fi
+    
+    echo -e "Protocol (TCP/UDP) [Default TCP]:"
+    read -r W_PROTO
+    W_PROTO=$(echo "${W_PROTO:-TCP}" | tr 'a-z' 'A-Z')
 
-# --- REPORTER CONFIG (NEW) ---
-do_reporter_setup() {
     while true; do
-        show_header
-        echo -e "${YELLOW}--- ABUSEIPDB SETTINGS ---${NC}"
+        ST_AB="${RED}OFF${NC}"; ST_CL="${RED}OFF${NC}"; ST_BF="${RED}OFF${NC}"
         
-        # KEY STATUS
-        if [ -s "$KEY_FILE" ]; then KEY_ST="${GREEN}Configured${NC}"; else KEY_ST="${RED}Missing${NC}"; fi
-        
-        # COOLDOWN STATUS
-        DAYS=$((REPORT_COOLDOWN / 86400)); HOURS=$(( (REPORT_COOLDOWN % 86400) / 3600 ))
-        TIME_ST="${CYAN}${REPORT_COOLDOWN}s${NC} (${DAYS}d ${HOURS}h)"
+        # Check current status
+        if [ "$W_PROTO" = "TCP" ]; then
+            for p in $TCP_SERVICES; do [ "$p" = "$W_PORT" ] && ST_AB="${GREEN}ON${NC}"; done
+            for p in $BYPASS_CONN_TCP; do [ "$p" = "$W_PORT" ] && ST_CL="${GREEN}ON${NC}"; done
+            for p in $BYPASS_BRUTE_TCP; do [ "$p" = "$W_PORT" ] && ST_BF="${GREEN}ON${NC}"; done
+        else
+            for p in $UDP_SERVICES; do [ "$p" = "$W_PORT" ] && ST_AB="${GREEN}ON${NC}"; done
+            for p in $BYPASS_CONN_UDP; do [ "$p" = "$W_PORT" ] && ST_CL="${GREEN}ON${NC}"; done
+            for p in $BYPASS_BRUTE_UDP; do [ "$p" = "$W_PORT" ] && ST_BF="${GREEN}ON${NC}"; done
+        fi
 
-        echo -e " 1) API Key Status:     [$KEY_ST]"
-        echo -e " 2) Reporting Cooldown: [$TIME_ST]"
-        echo -e "    ${DIM}(Don't report same IP again for this time)${NC}"
-        echo -e " 0) Back"
+        show_header
+        echo -e "${YELLOW}--- CONFIGURING PORT $W_PORT/$W_PROTO ---${NC}"
+        echo -e "Tick/Untick the protections you want to BYPASS for this specific port."
+        echo ""
+        echo -e " 1) Bypass AutoBan (Trap) ......... [$ST_AB]"
+        echo -e " 2) Bypass DDoS (ConnLimit) ....... [$ST_CL]"
+        echo -e " 3) Bypass BruteForce ............. [$ST_BF]"
+        echo ""
+        echo -e " 0) Save & Return"
         echo ""
         echo -n "Select option: "
-        read -r ROPT
-        case $ROPT in
-            1)
-                echo ""
-                echo -n "Enter new AbuseIPDB API Key: "
-                read -r NEW_KEY
-                if [ -n "$NEW_KEY" ]; then
-                    echo "$NEW_KEY" > "$KEY_FILE"
-                    chmod 600 "$KEY_FILE"
-                    echo -e "${GREEN}Key updated.${NC}"
-                    sleep 1
-                fi
+        read -r W_OPT
+
+        case $W_OPT in
+            1) 
+                if [ "$W_PROTO" = "TCP" ]; then TCP_SERVICES=$(toggle_port "$TCP_SERVICES" "$W_PORT"); else UDP_SERVICES=$(toggle_port "$UDP_SERVICES" "$W_PORT"); fi
                 ;;
             2)
-                echo ""
-                echo "Do you want to calculate the duration?"
-                echo -e " 1) Yes (Use Calculator)"
-                echo -e " 2) No (Enter Total Seconds directly)"
-                echo -n "Selection: "
-                read -r T_OPT
-                NEW_VAL=""
-                if [ "$T_OPT" = "1" ]; then
-                    NEW_VAL=$(calculate_seconds "full")
-                    echo -e "Calculated: ${CYAN}$NEW_VAL seconds${NC}"
-                else
-                    echo -n "Enter Cooldown in seconds (Default 604800 = 7 days): "
-                    read -r IN_VAL
-                    NEW_VAL="$IN_VAL"
-                fi
-                
-                if [ -n "$NEW_VAL" ] && echo "$NEW_VAL" | grep -qE '^[0-9]+$'; then
-                    REPORT_COOLDOWN="$NEW_VAL"
-                    save_config
-                    echo -e "${GREEN}Cooldown updated.${NC}"
-                    sleep 1
-                fi
+                if [ "$W_PROTO" = "TCP" ]; then BYPASS_CONN_TCP=$(toggle_port "$BYPASS_CONN_TCP" "$W_PORT"); else BYPASS_CONN_UDP=$(toggle_port "$BYPASS_CONN_UDP" "$W_PORT"); fi
                 ;;
-            0) return ;;
+            3)
+                if [ "$W_PROTO" = "TCP" ]; then BYPASS_BRUTE_TCP=$(toggle_port "$BYPASS_BRUTE_TCP" "$W_PORT"); else BYPASS_BRUTE_UDP=$(toggle_port "$BYPASS_BRUTE_UDP" "$W_PORT"); fi
+                ;;
+            0) save_config; return ;;
         esac
     done
 }
 
-# --- PORT EDITOR (ADVANCED) ---
 manage_port_list() {
-    PROTO=$1
+    VAR_NAME=$1
+    TITLE=$2
     while true; do
-        # Determine variable name based on protocol
-        if [ "$PROTO" = "TCP" ]; then
-            CURRENT_LIST="$TCP_SERVICES"
-            VAR_NAME="TCP_SERVICES"
-        else
-            CURRENT_LIST="$UDP_SERVICES"
-            VAR_NAME="UDP_SERVICES"
-        fi
-
+        eval "CURRENT_LIST=\$$VAR_NAME"
         show_header
-        echo -e "${YELLOW}--- MANAGE $PROTO PORTS ---${NC}"
+        echo -e "${YELLOW}--- $TITLE ---${NC}"
         echo -e "Current List: ${GREEN}${CURRENT_LIST:-None}${NC}"
         echo ""
-        echo -e " a) Add Port(s)"
-        echo -e " r) Remove Port"
         echo -e " e) Edit Raw String (Manual)"
         echo -e " 0) Back"
         echo ""
         echo -n "Select option: "
         read -r MOPT
-
         case $MOPT in
-            a|A)
-                echo -e "\nEnter port number(s) to ADD (separated by space):"
-                read -r TO_ADD
-                if [ -n "$TO_ADD" ]; then
-                    # Simple Append
-                    NEW_VAL="$CURRENT_LIST $TO_ADD"
-                    # Clean up spaces (xargs trims)
-                    NEW_VAL=$(echo "$NEW_VAL" | xargs)
-                    # Save
-                    if [ "$PROTO" = "TCP" ]; then TCP_SERVICES="$NEW_VAL"; else UDP_SERVICES="$NEW_VAL"; fi
-                    save_config
-                    echo -e "${GREEN}Port(s) added.${NC}"
-                    sleep 1
-                fi
-                ;;
-            r|R)
-                echo -e "\nEnter port number to REMOVE:"
-                read -r TO_REM
-                if [ -n "$TO_REM" ]; then
-                    NEW_LIST=""
-                    FOUND=0
-                    for p in $CURRENT_LIST; do
-                        if [ "$p" != "$TO_REM" ]; then
-                            NEW_LIST="$NEW_LIST $p"
-                        else
-                            FOUND=1
-                        fi
-                    done
-                    
-                    if [ "$FOUND" -eq 1 ]; then
-                        NEW_VAL=$(echo "$NEW_LIST" | xargs)
-                        if [ "$PROTO" = "TCP" ]; then TCP_SERVICES="$NEW_VAL"; else UDP_SERVICES="$NEW_VAL"; fi
-                        save_config
-                        echo -e "${GREEN}Port $TO_REM removed.${NC}"
-                    else
-                        echo -e "${RED}Port $TO_REM not found in list.${NC}"
-                    fi
-                    sleep 1
-                fi
-                ;;
             e|E)
-                # FIX: Removed -e -i which causes crash on minimal shells
                 echo -e "\nCurrent Value: ${CYAN}${CURRENT_LIST}${NC}"
-                echo -e "Enter NEW string below (or press Enter to keep current):"
+                echo -e "Enter NEW string below (space separated) or press Enter to keep current:"
                 read -r NEW_VAL
-                
                 if [ -n "$NEW_VAL" ]; then
-                    if [ "$PROTO" = "TCP" ]; then TCP_SERVICES="$NEW_VAL"; else UDP_SERVICES="$NEW_VAL"; fi
+                    eval "$VAR_NAME=\"$NEW_VAL\""
                     save_config
                     echo -e "${GREEN}Saved.${NC}"
-                else
-                    echo -e "${YELLOW}No change.${NC}"
                 fi
                 sleep 1
                 ;;
@@ -393,35 +284,57 @@ manage_port_list() {
     done
 }
 
+do_raw_lists_menu() {
+    while true; do
+        show_header
+        echo -e "${YELLOW}--- RAW LIST EDITOR (Advanced) ---${NC}"
+        echo -e " 1) AutoBan Bypass TCP   [${CYAN}${TCP_SERVICES:-None}${NC}]"
+        echo -e " 2) AutoBan Bypass UDP   [${CYAN}${UDP_SERVICES:-None}${NC}]"
+        echo -e " 3) ConnLimit Bypass TCP [${CYAN}${BYPASS_CONN_TCP:-None}${NC}]"
+        echo -e " 4) ConnLimit Bypass UDP [${CYAN}${BYPASS_CONN_UDP:-None}${NC}]"
+        echo -e " 5) BruteForce Bypass TCP[${CYAN}${BYPASS_BRUTE_TCP:-None}${NC}]"
+        echo -e " 6) BruteForce Bypass UDP[${CYAN}${BYPASS_BRUTE_UDP:-None}${NC}]"
+        echo ""
+        echo -e " 0) Back"
+        echo ""
+        echo -n "Select option: "
+        read -r ROPT
+        case $ROPT in
+            1) manage_port_list "TCP_SERVICES" "AUTOBAN BYPASS (TCP)" ;;
+            2) manage_port_list "UDP_SERVICES" "AUTOBAN BYPASS (UDP)" ;;
+            3) manage_port_list "BYPASS_CONN_TCP" "CONNLIMIT BYPASS (TCP)" ;;
+            4) manage_port_list "BYPASS_CONN_UDP" "CONNLIMIT BYPASS (UDP)" ;;
+            5) manage_port_list "BYPASS_BRUTE_TCP" "BRUTEFORCE BYPASS (TCP)" ;;
+            6) manage_port_list "BYPASS_BRUTE_UDP" "BRUTEFORCE BYPASS (UDP)" ;;
+            0) return ;;
+        esac
+    done
+}
+
 do_port_editor() {
     while true; do
         show_header
-        echo -e "${YELLOW}--- ALLOWED PORTS & SERVICES ---${NC}"
-        echo -e "${DIM}Traffic on these ports will NOT trigger the Trap.${NC}"
+        echo -e "${YELLOW}--- PORT EXCEPTION MANAGER ---${NC}"
+        echo -e "Create granular bypass rules for specific ports."
         echo ""
-        echo -e " 1) Manage TCP Ports     [${GREEN}${TCP_SERVICES:-None}${NC}]"
-        echo -e " 2) Manage UDP Ports     [${GREEN}${UDP_SERVICES:-None}${NC}]"
-        echo -e " 3) TCP Passive Range    [${GREEN}${TCP_PASSIVE_RANGE:-None}${NC}]"
+        echo -e " 1) ⚡ ${CYAN}Configure a Port (Wizard)${NC}"
+        echo -e "    ${DIM}Select a port and tick which protections to bypass.${NC}"
+        echo ""
+        echo -e " 2) 📝 Edit Raw Lists (Advanced)"
+        echo -e " 3) 🎛️  TCP Passive Range [${GREEN}${TCP_PASSIVE_RANGE:-None}${NC}]"
+        echo ""
         echo -e " 0) Back"
         echo ""
         echo -n "Select option: "
         read -r POPT
         case $POPT in
-            1) manage_port_list "TCP" ;;
-            2) manage_port_list "UDP" ;;
+            1) do_port_wizard ;;
+            2) do_raw_lists_menu ;;
             3)
-                # FIX: Removed -e -i incompatible with standard sh/ash
                 echo -e "\nCurrent Range: ${CYAN}${TCP_PASSIVE_RANGE:-None}${NC}"
                 echo -e "Enter Passive Port Range (e.g. 50000:50100) or Enter to keep:"
                 read -r NEW_RNG
-                
-                if [ -n "$NEW_RNG" ]; then 
-                    TCP_PASSIVE_RANGE="$NEW_RNG"
-                    save_config
-                    echo -e "${GREEN}Saved.${NC}"
-                else
-                    echo -e "${YELLOW}No change.${NC}"
-                fi
+                if [ -n "$NEW_RNG" ]; then TCP_PASSIVE_RANGE="$NEW_RNG"; save_config; echo -e "${GREEN}Saved.${NC}"; fi
                 sleep 1
                 ;;
             0) return ;;
@@ -554,6 +467,119 @@ do_timeout_setup() {
     pause
 }
 
+# --- WHITELIST MENU ---
+do_whitelist_menu() {
+    while true; do
+        show_header
+        echo -e "${YELLOW}--- WHITELIST MANAGER ---${NC}"
+        echo -e "Trusted IPs/Subnets bypass ALL firewall blocks."
+        echo ""
+        echo -e " 1) Add IP/Subnet to Whitelist"
+        echo -e " 2) Remove IP/Subnet"
+        echo -e " 3) View Current Whitelist"
+        echo -e " 0) Back"
+        echo ""
+        echo -n "Selection: "
+        read -r w_opt
+        
+        case $w_opt in
+            1)
+                echo -n "Enter IP or Subnet (e.g. 192.168.1.5 or 10.0.0.0/8): "
+                read -r new_ip
+                if [ -n "$new_ip" ]; then
+                    # Basic validation and append
+                    echo "$new_ip" >> "$WHITELIST_FILE"
+                    if echo "$new_ip" | grep -q ":"; then
+                        ipset add FirewallWhite6 "$new_ip" 2>/dev/null
+                    else
+                        ipset add FirewallWhite "$new_ip" 2>/dev/null
+                    fi
+                    echo -e "${GREEN}Added to whitelist.${NC}"
+                fi
+                sleep 1
+                ;;
+            2)
+                echo -n "Enter IP or Subnet to remove: "
+                read -r rem_ip
+                if [ -n "$rem_ip" ]; then
+                    # Remove from file
+                    sed -i "\@^$rem_ip\$@d" "$WHITELIST_FILE"
+                    # Remove from active sets
+                    ipset del FirewallWhite "$rem_ip" 2>/dev/null
+                    ipset del FirewallWhite6 "$rem_ip" 2>/dev/null
+                    echo -e "${YELLOW}Removed from whitelist.${NC}"
+                fi
+                sleep 1
+                ;;
+            3)
+                echo -e "\n${CYAN}--- Active Whitelist ($WHITELIST_FILE) ---${NC}"
+                if [ -s "$WHITELIST_FILE" ]; then
+                    cat "$WHITELIST_FILE"
+                else
+                    echo "List is empty."
+                fi
+                pause
+                ;;
+            0) return ;;
+            *) sleep 1 ;;
+        esac
+    done
+}
+
+# --- REPORTER SETUP ---
+do_reporter_setup() {
+    while true; do
+        show_header
+        echo -e "${YELLOW}--- AbuseIPDB API Settings ---${NC}"
+        
+        if [ -s "$KEY_FILE" ]; then
+            echo -e "Current API Key: ${GREEN}CONFIGURED${NC} ($(wc -c < "$KEY_FILE") chars)"
+        else
+            echo -e "Current API Key: ${RED}NOT CONFIGURED${NC}"
+        fi
+        
+        echo -e "\n 1) Enter/Update API Key"
+        echo -e " 2) Clear API Key"
+        echo -e " 3) Set Reporting Cooldown [Current: ${CYAN}${REPORT_COOLDOWN}s${NC}]"
+        echo -e " 0) Back"
+        echo ""
+        echo -n "Selection: "
+        read -r r_opt
+        
+        case $r_opt in
+            1)
+                echo -n "Paste your AbuseIPDB API Key: "
+                read -r new_key
+                if [ -n "$new_key" ]; then
+                    echo "$new_key" | tr -d '[:space:]' > "$KEY_FILE"
+                    chmod 600 "$KEY_FILE"
+                    echo -e "${GREEN}Key saved successfully.${NC}"
+                fi
+                sleep 1
+                ;;
+            2)
+                > "$KEY_FILE"
+                echo -e "${YELLOW}Key cleared.${NC}"
+                sleep 1
+                ;;
+            3)
+                echo -n "Enter Cooldown in seconds (Default 604800 for 7 days): "
+                read -r new_cool
+                if echo "$new_cool" | grep -qE '^[0-9]+$'; then
+                    REPORT_COOLDOWN="$new_cool"
+                    save_config
+                    echo -e "${GREEN}Cooldown updated.${NC}"
+                else
+                    echo -e "${RED}Invalid input.${NC}"
+                fi
+                sleep 1
+                ;;
+            0) return ;;
+            *) sleep 1 ;;
+        esac
+    done
+}
+
 # --- FLUSH MENU (MANUAL CLEANUP) ---
 do_flush_menu() {
     while true; do
@@ -647,7 +673,8 @@ do_settings() {
         echo -e " 10) Brute-Force Sensitivity ........... [$ST_BF_SENS]"
         echo -e " 11) AbuseIPDB Settings ................ [${WHITE}Key & Cooldown${NC}]"
         echo ""
-        echo -e " 0) Back to Main Menu"
+        echo -e " 0) ${GREEN}Apply Changes & Return${NC} (Restarts Hook)"
+        echo -e " x) ${RED}Return WITHOUT applying${NC} (Keep current rules)"
         echo ""
         echo -n "Select option: "
         read -r SOPT
@@ -707,7 +734,24 @@ do_settings() {
             9) do_timeout_setup ;;
             10) do_bf_setup ;;
             11) do_reporter_setup ;;
-            0) return ;;
+            0)
+                # Execute hook cleanly in background logic
+                echo -e "\n${YELLOW}Applying configuration and restarting Firewall Hook...${NC}"
+                if [ -x "$SCRIPT_HOOK" ]; then 
+                    table=filter "$SCRIPT_HOOK" >/dev/null 2>&1
+                    echo -e "${GREEN}Firewall rules updated successfully.${NC}"
+                else 
+                    echo -e "${RED}Hook script missing!${NC}"
+                fi
+                sleep 1
+                return 
+                ;;
+            x|X)
+                # Exit without applying
+                echo -e "\n${YELLOW}Returning to Main Menu... (Rules not restarted)${NC}"
+                sleep 1
+                return
+                ;;
             *) echo "Invalid option"; sleep 1 ;;
         esac
     done
@@ -740,19 +784,19 @@ do_health_check() {
     echo -e "\n${BOLD}1. System Components${NC}"
     
     # Check Logging Daemon (ULOGD)
-    # Controllo robusto con ps
+    # Robust check with ps
     if ps | grep -v grep | grep -q "ulogd"; then 
         echo -e "   Logger (ULOGD):     ${GREEN}RUNNING${NC}"
     else 
         echo -e "   Logger (ULOGD):     ${RED}STOPPED (No logs will be recorded)${NC}"
     fi
 
-    # Check Scheduler (CRON & JOB) - FIX ROBUSTO
-    # Verifica sia 'crond' che 'cron' usando ps
+    # Check Scheduler (CRON & JOB) - ROBUST FIX
+    # Check both 'crond' and 'cron' using ps
     if ! ps | grep -v grep | grep -qE "crond|cron"; then 
         echo -e "   Scheduler (CRON):   ${RED}STOPPED (Daemon not running)${NC}"
     else 
-        # Il demone gira, verifichiamo se il job esiste
+        # Daemon is running, verify if the job exists
         if crontab -l 2>/dev/null | grep -q "update_blocklist.sh"; then
             echo -e "   Scheduler (CRON):   ${GREEN}ACTIVE (Job scheduled)${NC}"
         else
@@ -794,7 +838,7 @@ do_health_check() {
         if [ "$CNT_V6" -gt 10 ]; then STATUS="${GREEN}OK ($CNT_V6 IPs)${NC}"; else STATUS="${RED}CRITICAL (Empty: $CNT_V6)${NC}"; fi
         echo -e "   IPv6 Blocklist:     $STATUS"
         
-        # [ADDED] IPv6 Whitelist Display
+        # IPv6 Whitelist Display
         CNT_WHITE6=$(ipset list FirewallWhite6 2>/dev/null | grep -cE '^[0-9a-fA-F:]')
         echo -e "   IPv6 Whitelist:     ${CYAN}$CNT_WHITE6 IPs${NC}"
         
@@ -833,7 +877,7 @@ do_health_check() {
 
 # --- ACTIONS ---
 do_update() { echo -e "${YELLOW}Updating Blocklists...${NC}"; if [ -x "$SCRIPT_UPDATE" ]; then "$SCRIPT_UPDATE"; echo -e "${GREEN}Done.${NC}"; fi; pause; }
-do_stats() { echo -e "${YELLOW}Generating Stats & Running Sherlock...${NC}"; if [ -x "$SCRIPT_STATS" ]; then "$SCRIPT_STATS" force; echo -e "${GREEN}Done.${NC}"; fi; pause; }
+do_stats() { echo -e "${YELLOW}Generating Stats & Dashboard...${NC}"; if [ -x "$SCRIPT_STATS" ]; then "$SCRIPT_STATS" force; echo -e "${GREEN}Done.${NC}"; fi; pause; }
 do_monitor() { if [ -x "$SCRIPT_MONITOR" ]; then "$SCRIPT_MONITOR"; else echo -e "${RED}Missing script${NC}"; pause; fi; }
 do_vpn() { if [ -x "$SCRIPT_VPN" ]; then "$SCRIPT_VPN"; echo -e "${GREEN}Done.${NC}"; fi; pause; }
 do_report() { echo -e "${YELLOW}Sending Reports to AbuseIPDB...${NC}"; if [ -x "$SCRIPT_REPORTER" ]; then "$SCRIPT_REPORTER"; else echo -e "${RED}Reporter script missing${NC}"; fi; pause; }
@@ -850,7 +894,7 @@ while true; do
     echo -e " 5) ${MAGENTA}📢 Run Abuse Reporter${NC}"
     echo -e " 6) ${YELLOW}🛡️  Run Diagnostics${NC} "
     echo -e " 7) ${RED}⚡ Restart Firewall Hook${NC} (Apply Config)"
-    echo -e " 8) ${MAGENTA}⚙️  Configuration & API${NC}"
+    echo -e " 8) ${MAGENTA}⚙️  Configuration & Ports${NC}"
     echo -e " 9) ${GREEN}✅ Manage Whitelist${NC} (IPs/Domains)"
     echo -e " f) ${RED}🗑️  Flush Lists (Manually)${NC}"
     echo -e " e) ${RED}❌ Exit${NC}"
