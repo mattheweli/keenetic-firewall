@@ -447,13 +447,13 @@ get_avg() {
 get_ip_table() {
     WHERE=$1; TYPE=$2
     
-    # [CPU FIX: Aggrega i Top 10 PRIMA di fare il JOIN con le stringhe geografiche]
+    # [CPU FIX: Aggrega i Top 10 PRIMA di fare il JOIN, con alias 'd' corretto!]
     QUERY="SELECT sub.ip, sub.total, i.country, i.risk, i.domain, i.target_port, sub.list_type, i.port_history 
            FROM (
-               SELECT ip, SUM(count) as total, list_type 
-               FROM ip_drops 
+               SELECT d.ip, SUM(d.count) as total, d.list_type 
+               FROM ip_drops d 
                WHERE $WHERE 
-               GROUP BY ip 
+               GROUP BY d.ip 
                ORDER BY total DESC 
                LIMIT 10
            ) sub 
