@@ -1,9 +1,11 @@
 #!/bin/sh
 
 # ==============================================================================
-# KEENETIC FIREWALL HOOK v2.6.2 (MODULAR TRAP)
+# KEENETIC FIREWALL HOOK v2.7.0 (GRANULAR WHITELISTS)
 # Description: Dual-Stack Firewall with Auto-Ban, Connlimit & Port Logging.
 # Features:
+#   - NEW: Sub-chain architecture (FW_CHK_CONN, FW_CHK_BRUTE) for granular bypass.
+#   - NEW: ConnLimit and BruteForce protections now apply to UDP services as well.
 #   - FIX: load_mod grep mode change
 #   - FIX: IPv6 static list restore
 #   - MODULAR: Conditionally loads Connlimit, BruteForce, and AutoBan rules.
@@ -73,6 +75,12 @@ fi
 : ${BF_SECONDS:="60"}
 : ${BF_HITCOUNT:="5"}
 
+# Granular Bypass Fallbacks
+: ${BYPASS_CONN_TCP:=""}
+: ${BYPASS_CONN_UDP:=""}
+: ${BYPASS_BRUTE_TCP:=""}
+: ${BYPASS_BRUTE_UDP:=""}
+
 # Settings
 IPSET_MAIN="FirewallBlock"; IPSET_MAIN6="FirewallBlock6"
 IPSET_VPN="VPNBlock"
@@ -83,11 +91,15 @@ VPN_BANNED_FILE="/opt/etc/vpn_banned_ips.txt"
 AUTOBAN_SAVE_FILE="/opt/etc/firewall_autoban.save"
 MAX_ELEM_V4=524288; MAX_ELEM_V6=65536
 
-# --- HELPER: CONVERT SPACE TO COMMA ---
-to_csv() { echo "$1" | tr ' ' ','; }
+# --- HELPER: CONVERT SPACE TO COMMA (ROBUST) ---
+to_csv() { echo "$1" | tr -s ' ' ',' | sed 's/^,//;s/,$//'; }
 
 TCP_PORTS_CSV=$(to_csv "$TCP_SERVICES")
 UDP_PORTS_CSV=$(to_csv "$UDP_SERVICES")
+BYPASS_CONN_TCP_CSV=$(to_csv "$BYPASS_CONN_TCP")
+BYPASS_CONN_UDP_CSV=$(to_csv "$BYPASS_CONN_UDP")
+BYPASS_BRUTE_TCP_CSV=$(to_csv "$BYPASS_BRUTE_TCP")
+BYPASS_BRUTE_UDP_CSV=$(to_csv "$BYPASS_BRUTE_UDP")
 
 # ==============================================================================
 # 1. INITIALIZE IPSETS
@@ -168,6 +180,10 @@ iptables -N BLOCKLIST_IN 2>/dev/null; iptables -F BLOCKLIST_IN
 iptables -N BLOCKLIST_FWD 2>/dev/null; iptables -F BLOCKLIST_FWD
 iptables -N SCAN_TRAP 2>/dev/null;     iptables -F SCAN_TRAP
 
+# Sub-chains for granular checks
+iptables -N FW_CHK_CONN 2>/dev/null;   iptables -F FW_CHK_CONN
+iptables -N FW_CHK_BRUTE 2>/dev/null;  iptables -F FW_CHK_BRUTE
+
 # --- WHITELISTS (Global & Local) ---
 iptables -A BLOCKLIST_IN -s 127.0.0.0/8 -j RETURN
 iptables -A BLOCKLIST_IN -i tun+ -j RETURN
@@ -228,24 +244,24 @@ if [ -n "$TCP_PORTS_CSV" ]; then
     
     # MODULAR: ConnLimit (DDoS)
     if [ "$ENABLE_CONNLIMIT" = "true" ]; then
-        iptables -A SCAN_TRAP -p tcp -m multiport --dports "$TCP_PORTS_CSV" \
-            -m connlimit --connlimit-above "$CONNLIMIT_MAX" -j DROP
+        iptables -A SCAN_TRAP -p tcp -m multiport --dports "$TCP_PORTS_CSV" -j FW_CHK_CONN
+        if [ -n "$BYPASS_CONN_TCP_CSV" ]; then 
+            iptables -A FW_CHK_CONN -p tcp -m multiport --dports "$BYPASS_CONN_TCP_CSV" -j RETURN
+        fi
+        iptables -A FW_CHK_CONN -p tcp -m connlimit --connlimit-above "$CONNLIMIT_MAX" -j DROP
     fi
 
     # MODULAR: BruteForce Protection
     if [ "$ENABLE_BRUTEFORCE" = "true" ]; then
+        iptables -A SCAN_TRAP -p tcp -m multiport --dports "$TCP_PORTS_CSV" -j FW_CHK_BRUTE
+        if [ -n "$BYPASS_BRUTE_TCP_CSV" ]; then 
+            iptables -A FW_CHK_BRUTE -p tcp -m multiport --dports "$BYPASS_BRUTE_TCP_CSV" -j RETURN
+        fi
         # Check if already over threshold -> Ban (conditionally) or Drop
-        iptables -A SCAN_TRAP -p tcp -m multiport --dports "$TCP_PORTS_CSV" -m state --state NEW \
-            -m recent --update --seconds $BF_SECONDS --hitcount $BF_HITCOUNT --name BF_PROT --rsource \
-            -j SET --add-set "$IPSET_AUTOBAN" src 2>/dev/null
-
-        iptables -A SCAN_TRAP -p tcp -m multiport --dports "$TCP_PORTS_CSV" -m state --state NEW \
-            -m recent --update --seconds $BF_SECONDS --hitcount $BF_HITCOUNT --name BF_PROT --rsource \
-            -j DROP
-
+        iptables -A FW_CHK_BRUTE -p tcp -m state --state NEW -m recent --update --seconds $BF_SECONDS --hitcount $BF_HITCOUNT --name BF_PROT --rsource -j SET --add-set "$IPSET_AUTOBAN" src 2>/dev/null
+        iptables -A FW_CHK_BRUTE -p tcp -m state --state NEW -m recent --update --seconds $BF_SECONDS --hitcount $BF_HITCOUNT --name BF_PROT --rsource -j DROP
         # Create new entry for tracking
-        iptables -A SCAN_TRAP -p tcp -m multiport --dports "$TCP_PORTS_CSV" -m state --state NEW \
-            -m recent --set --name BF_PROT --rsource
+        iptables -A FW_CHK_BRUTE -p tcp -m state --state NEW -m recent --set --name BF_PROT --rsource
     fi
 
     # Allow if passed checks
@@ -257,8 +273,32 @@ if [ -n "$TCP_PASSIVE_RANGE" ]; then
     iptables -A SCAN_TRAP -p tcp --dport "$TCP_PASSIVE_RANGE" -j RETURN
 fi
 
-# 4. UDP Services
+# 4. UDP Services (With Modular Protections)
 if [ -n "$UDP_PORTS_CSV" ]; then
+    
+    # MODULAR: ConnLimit (DDoS)
+    if [ "$ENABLE_CONNLIMIT" = "true" ]; then
+        iptables -A SCAN_TRAP -p udp -m multiport --dports "$UDP_PORTS_CSV" -j FW_CHK_CONN
+        if [ -n "$BYPASS_CONN_UDP_CSV" ]; then 
+            iptables -A FW_CHK_CONN -p udp -m multiport --dports "$BYPASS_CONN_UDP_CSV" -j RETURN
+        fi
+        iptables -A FW_CHK_CONN -p udp -m connlimit --connlimit-above "$CONNLIMIT_MAX" -j DROP
+    fi
+
+    # MODULAR: BruteForce Protection
+    if [ "$ENABLE_BRUTEFORCE" = "true" ]; then
+        iptables -A SCAN_TRAP -p udp -m multiport --dports "$UDP_PORTS_CSV" -j FW_CHK_BRUTE
+        if [ -n "$BYPASS_BRUTE_UDP_CSV" ]; then 
+            iptables -A FW_CHK_BRUTE -p udp -m multiport --dports "$BYPASS_BRUTE_UDP_CSV" -j RETURN
+        fi
+        # Check if already over threshold -> Ban (conditionally) or Drop
+        iptables -A FW_CHK_BRUTE -p udp -m state --state NEW -m recent --update --seconds $BF_SECONDS --hitcount $BF_HITCOUNT --name BF_PROT_U --rsource -j SET --add-set "$IPSET_AUTOBAN" src 2>/dev/null
+        iptables -A FW_CHK_BRUTE -p udp -m state --state NEW -m recent --update --seconds $BF_SECONDS --hitcount $BF_HITCOUNT --name BF_PROT_U --rsource -j DROP
+        # Create new entry for tracking
+        iptables -A FW_CHK_BRUTE -p udp -m state --state NEW -m recent --set --name BF_PROT_U --rsource
+    fi
+
+    # Allow if passed checks
     iptables -A SCAN_TRAP -p udp -m multiport --dports "$UDP_PORTS_CSV" -j RETURN
 fi
 
@@ -298,6 +338,10 @@ if [ "$ENABLE_IPV6" = "true" ]; then
     ip6tables -N BLOCKLIST_IN6 2>/dev/null; ip6tables -F BLOCKLIST_IN6
     ip6tables -N BLOCKLIST_FWD6 2>/dev/null; ip6tables -F BLOCKLIST_FWD6
     ip6tables -N SCAN_TRAP6 2>/dev/null;     ip6tables -F SCAN_TRAP6
+    
+    # Sub-chains for granular checks
+    ip6tables -N FW_CHK_CONN6 2>/dev/null;   ip6tables -F FW_CHK_CONN6
+    ip6tables -N FW_CHK_BRUTE6 2>/dev/null;  ip6tables -F FW_CHK_BRUTE6
     
     # Whitelists
     ip6tables -A BLOCKLIST_IN6 -s ::1/128 -j RETURN
@@ -347,22 +391,18 @@ if [ "$ENABLE_IPV6" = "true" ]; then
         
         # MODULAR: ConnLimit
         if [ "$ENABLE_CONNLIMIT" = "true" ]; then
-            ip6tables -A SCAN_TRAP6 -p tcp -m multiport --dports "$TCP_PORTS_CSV" \
-                -m connlimit --connlimit-above "$CONNLIMIT_MAX" -j DROP
+            ip6tables -A SCAN_TRAP6 -p tcp -m multiport --dports "$TCP_PORTS_CSV" -j FW_CHK_CONN6
+            if [ -n "$BYPASS_CONN_TCP_CSV" ]; then ip6tables -A FW_CHK_CONN6 -p tcp -m multiport --dports "$BYPASS_CONN_TCP_CSV" -j RETURN; fi
+            ip6tables -A FW_CHK_CONN6 -p tcp -m connlimit --connlimit-above "$CONNLIMIT_MAX" -j DROP
         fi
 
         # MODULAR: BruteForce
         if [ "$ENABLE_BRUTEFORCE" = "true" ]; then
-            ip6tables -A SCAN_TRAP6 -p tcp -m multiport --dports "$TCP_PORTS_CSV" -m state --state NEW \
-                -m recent --update --seconds $BF_SECONDS --hitcount $BF_HITCOUNT --name BF_PROT6 --rsource \
-                -j SET --add-set "$IPSET_AUTOBAN6" src 2>/dev/null
-
-            ip6tables -A SCAN_TRAP6 -p tcp -m multiport --dports "$TCP_PORTS_CSV" -m state --state NEW \
-                -m recent --update --seconds $BF_SECONDS --hitcount $BF_HITCOUNT --name BF_PROT6 --rsource \
-                -j DROP
-
-            ip6tables -A SCAN_TRAP6 -p tcp -m multiport --dports "$TCP_PORTS_CSV" -m state --state NEW \
-                -m recent --set --name BF_PROT6 --rsource
+            ip6tables -A SCAN_TRAP6 -p tcp -m multiport --dports "$TCP_PORTS_CSV" -j FW_CHK_BRUTE6
+            if [ -n "$BYPASS_BRUTE_TCP_CSV" ]; then ip6tables -A FW_CHK_BRUTE6 -p tcp -m multiport --dports "$BYPASS_BRUTE_TCP_CSV" -j RETURN; fi
+            ip6tables -A FW_CHK_BRUTE6 -p tcp -m state --state NEW -m recent --update --seconds $BF_SECONDS --hitcount $BF_HITCOUNT --name BF_PROT6 --rsource -j SET --add-set "$IPSET_AUTOBAN6" src 2>/dev/null
+            ip6tables -A FW_CHK_BRUTE6 -p tcp -m state --state NEW -m recent --update --seconds $BF_SECONDS --hitcount $BF_HITCOUNT --name BF_PROT6 --rsource -j DROP
+            ip6tables -A FW_CHK_BRUTE6 -p tcp -m state --state NEW -m recent --set --name BF_PROT6 --rsource
         fi
 
         ip6tables -A SCAN_TRAP6 -p tcp -m multiport --dports "$TCP_PORTS_CSV" -j RETURN
@@ -370,7 +410,21 @@ if [ "$ENABLE_IPV6" = "true" ]; then
 
     if [ -n "$TCP_PASSIVE_RANGE" ]; then ip6tables -A SCAN_TRAP6 -p tcp --dport "$TCP_PASSIVE_RANGE" -j RETURN; fi
     
+    # IPv6 UDP Services
     if [ -n "$UDP_PORTS_CSV" ]; then
+        if [ "$ENABLE_CONNLIMIT" = "true" ]; then
+            ip6tables -A SCAN_TRAP6 -p udp -m multiport --dports "$UDP_PORTS_CSV" -j FW_CHK_CONN6
+            if [ -n "$BYPASS_CONN_UDP_CSV" ]; then ip6tables -A FW_CHK_CONN6 -p udp -m multiport --dports "$BYPASS_CONN_UDP_CSV" -j RETURN; fi
+            ip6tables -A FW_CHK_CONN6 -p udp -m connlimit --connlimit-above "$CONNLIMIT_MAX" -j DROP
+        fi
+
+        if [ "$ENABLE_BRUTEFORCE" = "true" ]; then
+            ip6tables -A SCAN_TRAP6 -p udp -m multiport --dports "$UDP_PORTS_CSV" -j FW_CHK_BRUTE6
+            if [ -n "$BYPASS_BRUTE_UDP_CSV" ]; then ip6tables -A FW_CHK_BRUTE6 -p udp -m multiport --dports "$BYPASS_BRUTE_UDP_CSV" -j RETURN; fi
+            ip6tables -A FW_CHK_BRUTE6 -p udp -m state --state NEW -m recent --update --seconds $BF_SECONDS --hitcount $BF_HITCOUNT --name BF_PROT6_U --rsource -j SET --add-set "$IPSET_AUTOBAN6" src 2>/dev/null
+            ip6tables -A FW_CHK_BRUTE6 -p udp -m state --state NEW -m recent --update --seconds $BF_SECONDS --hitcount $BF_HITCOUNT --name BF_PROT6_U --rsource -j DROP
+            ip6tables -A FW_CHK_BRUTE6 -p udp -m state --state NEW -m recent --set --name BF_PROT6_U --rsource
+        fi
         ip6tables -A SCAN_TRAP6 -p udp -m multiport --dports "$UDP_PORTS_CSV" -j RETURN
     fi
 
@@ -403,6 +457,8 @@ else
     ip6tables -F BLOCKLIST_IN6 2>/dev/null; ip6tables -X BLOCKLIST_IN6 2>/dev/null
     ip6tables -F BLOCKLIST_FWD6 2>/dev/null; ip6tables -X BLOCKLIST_FWD6 2>/dev/null
     ip6tables -F SCAN_TRAP6 2>/dev/null; ip6tables -X SCAN_TRAP6 2>/dev/null
+    ip6tables -F FW_CHK_CONN6 2>/dev/null; ip6tables -X FW_CHK_CONN6 2>/dev/null
+    ip6tables -F FW_CHK_BRUTE6 2>/dev/null; ip6tables -X FW_CHK_BRUTE6 2>/dev/null
 fi
 
 # ==============================================================================
