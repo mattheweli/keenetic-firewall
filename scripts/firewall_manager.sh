@@ -59,7 +59,7 @@ BOLD='\033[1m'; DIM='\033[2m'
 show_header() {
     clear
     echo -e "${BLUE}=================================================${NC}"
-    echo -e "${BOLD}🛡️  KEENETIC FIREWALL MANAGER v2.5.0${NC}"
+    echo -e "${BOLD}🛡️  KEENETIC FIREWALL MANAGER v2.5.1${NC}"
     echo -e "${BLUE}=================================================${NC}"
 }
 
