@@ -1,8 +1,9 @@
 #!/bin/sh
 
 # ==============================================================================
-# KEENETIC FIREWALL MANAGER v2.5.0 (GRANULAR BYPASS WIZARD)
+# KEENETIC FIREWALL MANAGER v2.5.1 (GRANULAR BYPASS WIZARD)
 # Changelog:
+#   - FIX: port management for clearing entries
 #   - FEAT: Introduced Granular Port Whitelisting (Sub-chain Architecture).
 #   - FEAT: Interactive Port Wizard to bypass AutoBan, ConnLimit or BruteForce independently.
 #   - UX: Settings are automatically applied on exiting the config menu (Option 0).
@@ -262,6 +263,7 @@ manage_port_list() {
         echo -e "Current List: ${GREEN}${CURRENT_LIST:-None}${NC}"
         echo ""
         echo -e " e) Edit Raw String (Manual)"
+        echo -e " c) ${RED}Clear List (Set to Empty)${NC}"
         echo -e " 0) Back"
         echo ""
         echo -n "Select option: "
@@ -276,6 +278,13 @@ manage_port_list() {
                     save_config
                     echo -e "${GREEN}Saved.${NC}"
                 fi
+                sleep 1
+                ;;
+            c|C)
+                # Svuota esplicitamente la variabile
+                eval "$VAR_NAME=\"\""
+                save_config
+                echo -e "${YELLOW}List cleared.${NC}"
                 sleep 1
                 ;;
             0) return ;;
