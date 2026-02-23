@@ -1,13 +1,14 @@
 #!/bin/sh
 
 # ==============================================================================
-# KEENETIC FIREWALL STATS v3.5.3 (EMAIL INTEGRATION)
+# KEENETIC FIREWALL STATS v3.5.4 (EMAIL INTEGRATION)
 # ==============================================================================
 # AUTHOR: mattheweli
 # DESCRIPTION: 
 #   Aggregates firewall statistics, parses sniffer data for port mapping,
 #   and generates JSON data for the web dashboard.
 #
+#     - CRITICAL FIX: ulogd PCAP rotation file
 #	  - NEW: Database and sniffer analysis optimized   
 #     - NEW: Added email reporting module
 #     - FIX: WAN sniffer process optimized
@@ -94,7 +95,7 @@ NOW=$($DATE_CMD +%s)
 NEW_DROPS_V4=0; NEW_DROPS_V6=0; NEW_DROPS_VPN=0; NEW_DROPS_TRAP=0; NEW_DROPS_TRAP6=0
 NEW_IP_RECORDS=0
 
-echo "=== Firewall Stats Updater v3.5.3 ==="
+echo "=== Firewall Stats Updater v3.5.4 ==="
 
 # ==============================================================================
 # 3. DATABASE INITIALIZATION & TUNING
@@ -418,6 +419,18 @@ if [ -n "$LOG_BUFFER" ] && [ -s "$LOG_BUFFER" ]; then
     
     # Cleanup temporary files
     rm -f "/tmp/port_update.sql" "$DB_CACHE" "$UNIQUE_TRAFFIC" "$ACTIVE_IPS" "/tmp/query.sql" 2>/dev/null
+    
+    # --- ULOGD PCAP AUTO-ROTATION (REAL-TIME) ---
+    # Check file size (Limit: ~10 MB = 10485760 bytes)
+    # Using wc -c is extremely lightweight and prevents CPU overhead
+    PCAP_SIZE=$(wc -c < "$LOG_BUFFER" 2>/dev/null)
+    if [ -n "$PCAP_SIZE" ] && [ "$PCAP_SIZE" -gt 10485760 ]; then
+        echo " -> Rotating oversized PCAP file ($PCAP_SIZE bytes)..."
+        rm -f "$LOG_BUFFER"
+        killall -HUP ulogd 2>/dev/null
+        echo "0" > "$LAST_TS_FILE" # Reset the time bookmark
+    fi
+    # ---------------------------------
 else
     echo " -> 🕵️ Buffer empty or missing."
 fi
