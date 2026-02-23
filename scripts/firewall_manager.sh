@@ -59,7 +59,7 @@ BOLD='\033[1m'; DIM='\033[2m'
 show_header() {
     clear
     echo -e "${BLUE}=================================================${NC}"
-    echo -e "${BOLD}🛡️  KEENETIC FIREWALL MANAGER v2.5.1${NC}"
+    echo -e "${BOLD}🛡️  KEENETIC FIREWALL MANAGER v2.5.0${NC}"
     echo -e "${BLUE}=================================================${NC}"
 }
 
@@ -341,12 +341,21 @@ do_port_editor() {
             2) do_raw_lists_menu ;;
             3)
                 echo -e "\nCurrent Range: ${CYAN}${TCP_PASSIVE_RANGE:-None}${NC}"
-                echo -e "Enter Passive Port Range (e.g. 50000:50100) or Enter to keep:"
+                echo -e "Enter Passive Port Range (e.g. 50000:50100), type 'c' to clear, or Enter to keep:"
                 read -r NEW_RNG
-                if [ -n "$NEW_RNG" ]; then TCP_PASSIVE_RANGE="$NEW_RNG"; save_config; echo -e "${GREEN}Saved.${NC}"; fi
+                if [ "$NEW_RNG" = "c" ] || [ "$NEW_RNG" = "C" ]; then
+                    TCP_PASSIVE_RANGE=""
+                    save_config
+                    echo -e "${YELLOW}Passive Range cleared.${NC}"
+                elif [ -n "$NEW_RNG" ]; then 
+                    TCP_PASSIVE_RANGE="$NEW_RNG"
+                    save_config
+                    echo -e "${GREEN}Saved.${NC}"
+                fi
                 sleep 1
                 ;;
             0) return ;;
+            *) echo "Invalid option"; sleep 1 ;;
         esac
     done
 }
