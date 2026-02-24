@@ -1,4 +1,4 @@
-<!-- Firewall Dashboard v1.1.2 -->
+<!-- Firewall Dashboard v1.1.3 -->
 
 <!DOCTYPE html>
 <html lang="en">
@@ -88,7 +88,7 @@
         }
         .refresh-select:hover, .refresh-select:focus { border-color: var(--primary-color); color: var(--primary-text); }
         .update-dot { height: 8px; width: 8px; border-radius: 50%; background-color: var(--text-gray); display: inline-block; opacity: 0.5; transition: all 0.3s; }
-        .update-dot.active { background-color: var(--green); opacity: 1; box-shadow: 0 0 5px var(--green); }
+        .update-dot.active { background-color: var(--green); opacity: 1; box-shadow: 0 0 5px var(--green); transform: scale(1.5); }
 
         /* SUMMARY CARDS */
         .grid-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 24px; margin-bottom: 32px; }
@@ -131,7 +131,7 @@
         .tab-btn:hover:not(.active) { border-color: var(--text-gray); color: var(--primary-text); }
         .tab-content { display: none; } .tab-content.active { display: block; }
 
-        /* GRIDS */
+        /* GRIDS & TABLES */
         .tables-grid { display: grid; grid-template-columns: 1fr; gap: 24px; margin-bottom: 24px; } 
         @media(min-width: 900px) { .tables-grid { grid-template-columns: 1fr 1fr; } }
         .triple-grid { display: grid; grid-template-columns: 1fr; gap: 24px; }
@@ -140,33 +140,21 @@
         .sub-header { font-size: 12px; text-transform: uppercase; color: var(--primary-text); font-weight: 500; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--stroke); }
         .table-container { background: var(--background); border-radius: 8px; box-shadow: var(--box-shadow-1); border: 1px solid var(--dashboard-card-border); overflow-x: auto; -webkit-overflow-scrolling: touch; }
         
-        /* === STRICT TABLE LAYOUT FIXES === */
-        table { width: 100%; border-collapse: collapse; table-layout: fixed; min-width: 350px; }
-        th { background: var(--th-bg); padding: 12px; font-size: 11px; text-transform: uppercase; color: var(--text-gray); font-weight: 500; border-bottom: 1px solid var(--stroke); }
-        td { padding: 10px 12px; border-bottom: 1px solid var(--stroke); font-size: 13px; color: var(--primary-text); white-space: normal; word-break: break-word; vertical-align: top; }
-        tr:last-child td { border-bottom: none; }
+        /* === RESTORED TABLE LOGIC (v1.0.2 style) === */
+        table { width: 100%; border-collapse: collapse; white-space: nowrap; }
+        th { background: var(--th-bg); padding: 12px; text-align: left; font-size: 11px; text-transform: uppercase; color: var(--text-gray); font-weight: 500; border-bottom: 1px solid var(--stroke); }
         
-        /* Force alignment for Sources Tables (Overriding Bash script generated alignment) */
-        .table-sources table { table-layout: fixed; width: 100%; }
-        .table-sources th:nth-child(1), .table-sources td:nth-child(1) { width: 18%; text-align: left !important; }
-        .table-sources th:nth-child(2), .table-sources td:nth-child(2) { width: 42%; text-align: left !important; }
-        .table-sources th:nth-child(3), .table-sources td:nth-child(3) { width: 40%; text-align: left !important; }
-
-        /* Force alignment for Ports Tables */
-        .table-ports table { table-layout: fixed; width: 100%; }
-        .table-ports th:nth-child(1), .table-ports td:nth-child(1) { width: 25%; text-align: left !important; }
-        .table-ports th:nth-child(2), .table-ports td:nth-child(2) { width: 55%; text-align: left !important; }
-        .table-ports th:nth-child(3), .table-ports td:nth-child(3) { width: 20%; text-align: right !important; padding-right: 16px; }
-
-        /* Automatic alignment for History Tables */
-        #view_history table { table-layout: fixed; width: 100%; }
-        #view_history th, #view_history td { text-align: right !important; }
-        #view_history th:first-child, #view_history td:first-child { text-align: left !important; width: 25%; }
+        /* Restored normal wrapping and vertical alignment from 1.0.2 */
+        td { padding: 10px 12px; border-bottom: 1px solid var(--stroke); font-size: 13px; color: var(--primary-text); vertical-align: middle; white-space: normal; word-break: break-all; }
         
-        #view_sources tbody tr { min-height: 60px; }
+        #view_sources tbody tr { height: 78px; vertical-align: middle; } 
+        #view_history tbody tr { height: auto; }
         
-        .meta { font-size: 13px; color: var(--text-gray); line-height: 1.4; display: block; overflow: hidden; text-overflow: ellipsis; }
-        .meta small { display: block; font-size: 12px; font-weight: 400; opacity: 0.8; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        /* Force alignment for the numbers */
+        .num { text-align: right; font-variant-numeric: tabular-nums; font-weight: 500; }
+        
+        .meta { font-size: 13px; color: var(--text-gray); line-height: 1.4; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .meta small { display: block; font-size: 12px; font-weight: 400; opacity: 0.8; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-height: 15px;}
         
         .col-main { color: var(--red); } td.col-v6 { color: var(--purple); } .col-vpn { color: var(--orange); } .col-trap { color: var(--primary-text); font-weight: 700; }
         .nodata { text-align: center; color: var(--text-gray); padding: 20px; font-style: italic; font-size: 13px; }
@@ -177,7 +165,7 @@
         a { color: var(--link); text-decoration: none; font-weight: 400; transition: text-decoration 0.2s; }
         a:hover { text-decoration: underline; }
         
-        .list-badge { font-size: 10px; padding: 2px 6px; border-radius: 4px; margin-right: 4px; margin-bottom: 4px; text-transform: uppercase; font-weight: 500; border: 1px solid currentColor; white-space: nowrap; display: inline-block; }
+        .list-badge { font-size: 10px; padding: 2px 6px; border-radius: 4px; margin-left: 6px; text-transform: uppercase; font-weight: 500; border: 1px solid currentColor; white-space: nowrap; display: inline-block; }
         .lb-main { color: var(--red); background: rgba(220,53,69,0.05); }
         .lb-v6 { color: var(--purple); background: rgba(111,66,193,0.05); }
         .lb-vpn { color: var(--orange); background: rgba(253,126,20,0.05); }
@@ -287,53 +275,53 @@
         
         <div id="tab_24h" class="tab-content active">
             <div class="triple-grid">
-                <div><div class="sub-header">Honeypot Victims</div><div class="table-container table-sources"><table><thead><tr><th>Cnt</th><th>Source</th><th>Info</th></tr></thead><tbody id="tb_trap_24h"></tbody></table></div></div>
-                <div><div class="sub-header">Static Blocks</div><div class="table-container table-sources"><table><thead><tr><th>Cnt</th><th>Source</th><th>Info</th></tr></thead><tbody id="tb_other_24h"></tbody></table></div></div>
-                <div><div class="sub-header">Top Active Subnets</div><div class="table-container table-sources"><table><thead><tr><th>Cnt</th><th>Subnet</th><th>Info</th></tr></thead><tbody id="tb_nets_24h"></tbody></table></div></div>
+                <div><div class="sub-header">Honeypot Victims</div><div class="table-container"><table><thead><tr><th style="width:60px">Cnt</th><th>Source</th><th>Info</th></tr></thead><tbody id="tb_trap_24h"></tbody></table></div></div>
+                <div><div class="sub-header">Static Blocks</div><div class="table-container"><table><thead><tr><th style="width:60px">Cnt</th><th>Source</th><th>Info</th></tr></thead><tbody id="tb_other_24h"></tbody></table></div></div>
+                <div><div class="sub-header">Top Active Subnets</div><div class="table-container"><table><thead><tr><th style="width:60px">Cnt</th><th>Subnet</th><th>Info</th></tr></thead><tbody id="tb_nets_24h"></tbody></table></div></div>
             </div>
             <div class="triple-grid" style="margin-top:24px;">
-                <div><div class="sub-header">Global Targeted Ports</div><div class="table-container table-ports"><table><thead><tr><th>Port</th><th>Top Attackers</th><th>Hits</th></tr></thead><tbody id="tb_ports_24h"></tbody></table></div></div>
-                <div><div class="sub-header">Honeypot/Brute Ports</div><div class="table-container table-ports"><table><thead><tr><th>Port</th><th>Top Attackers</th><th>Hits</th></tr></thead><tbody id="tb_brute_24h"></tbody></table></div></div>
-                <div><div class="sub-header">IPv6 Top Hitters</div><div class="table-container table-sources"><table><thead><tr><th>Cnt</th><th>Source</th><th>Info</th></tr></thead><tbody id="tb_ipv6_24h"></tbody></table></div></div>
+                <div><div class="sub-header">Global Targeted Ports</div><div class="table-container"><table><thead><tr><th style="width:60px">Port</th><th>Top Attackers</th><th class="num" style="width:60px">Hits</th></tr></thead><tbody id="tb_ports_24h"></tbody></table></div></div>
+                <div><div class="sub-header">Honeypot/Brute Ports</div><div class="table-container"><table><thead><tr><th style="width:60px">Port</th><th>Top Attackers</th><th class="num" style="width:60px">Hits</th></tr></thead><tbody id="tb_brute_24h"></tbody></table></div></div>
+                <div><div class="sub-header">IPv6 Top Hitters</div><div class="table-container"><table><thead><tr><th style="width:60px">Cnt</th><th>Source</th><th>Info</th></tr></thead><tbody id="tb_ipv6_24h"></tbody></table></div></div>
             </div>
         </div>
 
         <div id="tab_30d" class="tab-content">
             <div class="triple-grid">
-                <div><div class="sub-header">Honeypot Victims</div><div class="table-container table-sources"><table><thead><tr><th>Cnt</th><th>Source</th><th>Info</th></tr></thead><tbody id="tb_trap_30d"></tbody></table></div></div>
-                <div><div class="sub-header">Static Blocks</div><div class="table-container table-sources"><table><thead><tr><th>Cnt</th><th>Source</th><th>Info</th></tr></thead><tbody id="tb_other_30d"></tbody></table></div></div>
-                <div><div class="sub-header">Top Active Subnets</div><div class="table-container table-sources"><table><thead><tr><th>Cnt</th><th>Subnet</th><th>Info</th></tr></thead><tbody id="tb_nets_30d"></tbody></table></div></div>
+                <div><div class="sub-header">Honeypot Victims</div><div class="table-container"><table><thead><tr><th style="width:60px">Cnt</th><th>Source</th><th>Info</th></tr></thead><tbody id="tb_trap_30d"></tbody></table></div></div>
+                <div><div class="sub-header">Static Blocks</div><div class="table-container"><table><thead><tr><th style="width:60px">Cnt</th><th>Source</th><th>Info</th></tr></thead><tbody id="tb_other_30d"></tbody></table></div></div>
+                <div><div class="sub-header">Top Active Subnets</div><div class="table-container"><table><thead><tr><th style="width:60px">Cnt</th><th>Subnet</th><th>Info</th></tr></thead><tbody id="tb_nets_30d"></tbody></table></div></div>
             </div>
             <div class="triple-grid" style="margin-top:24px;">
-                <div><div class="sub-header">Global Targeted Ports</div><div class="table-container table-ports"><table><thead><tr><th>Port</th><th>Top Attackers</th><th>Hits</th></tr></thead><tbody id="tb_ports_30d"></tbody></table></div></div>
-                <div><div class="sub-header">Honeypot/Brute Ports</div><div class="table-container table-ports"><table><thead><tr><th>Port</th><th>Top Attackers</th><th>Hits</th></tr></thead><tbody id="tb_brute_30d"></tbody></table></div></div>
-                <div><div class="sub-header">IPv6 Top Hitters</div><div class="table-container table-sources"><table><thead><tr><th>Cnt</th><th>Source</th><th>Info</th></tr></thead><tbody id="tb_ipv6_30d"></tbody></table></div></div>
+                <div><div class="sub-header">Global Targeted Ports</div><div class="table-container"><table><thead><tr><th style="width:60px">Port</th><th>Top Attackers</th><th class="num" style="width:60px">Hits</th></tr></thead><tbody id="tb_ports_30d"></tbody></table></div></div>
+                <div><div class="sub-header">Honeypot/Brute Ports</div><div class="table-container"><table><thead><tr><th style="width:60px">Port</th><th>Top Attackers</th><th class="num" style="width:60px">Hits</th></tr></thead><tbody id="tb_brute_30d"></tbody></table></div></div>
+                <div><div class="sub-header">IPv6 Top Hitters</div><div class="table-container"><table><thead><tr><th style="width:60px">Cnt</th><th>Source</th><th>Info</th></tr></thead><tbody id="tb_ipv6_30d"></tbody></table></div></div>
             </div>
         </div>
 
         <div id="tab_1y" class="tab-content">
             <div class="triple-grid">
-                <div><div class="sub-header">Honeypot Victims</div><div class="table-container table-sources"><table><thead><tr><th>Cnt</th><th>Source</th><th>Info</th></tr></thead><tbody id="tb_trap_1y"></tbody></table></div></div>
-                <div><div class="sub-header">Static Blocks</div><div class="table-container table-sources"><table><thead><tr><th>Cnt</th><th>Source</th><th>Info</th></tr></thead><tbody id="tb_other_1y"></tbody></table></div></div>
-                <div><div class="sub-header">Top Active Subnets</div><div class="table-container table-sources"><table><thead><tr><th>Cnt</th><th>Subnet</th><th>Info</th></tr></thead><tbody id="tb_nets_1y"></tbody></table></div></div>
+                <div><div class="sub-header">Honeypot Victims</div><div class="table-container"><table><thead><tr><th style="width:60px">Cnt</th><th>Source</th><th>Info</th></tr></thead><tbody id="tb_trap_1y"></tbody></table></div></div>
+                <div><div class="sub-header">Static Blocks</div><div class="table-container"><table><thead><tr><th style="width:60px">Cnt</th><th>Source</th><th>Info</th></tr></thead><tbody id="tb_other_1y"></tbody></table></div></div>
+                <div><div class="sub-header">Top Active Subnets</div><div class="table-container"><table><thead><tr><th style="width:60px">Cnt</th><th>Subnet</th><th>Info</th></tr></thead><tbody id="tb_nets_1y"></tbody></table></div></div>
             </div>
             <div class="triple-grid" style="margin-top:24px;">
-                <div><div class="sub-header">Global Targeted Ports</div><div class="table-container table-ports"><table><thead><tr><th>Port</th><th>Top Attackers</th><th>Hits</th></tr></thead><tbody id="tb_ports_1y"></tbody></table></div></div>
-                <div><div class="sub-header">Honeypot/Brute Ports</div><div class="table-container table-ports"><table><thead><tr><th>Port</th><th>Top Attackers</th><th>Hits</th></tr></thead><tbody id="tb_brute_1y"></tbody></table></div></div>
-                <div><div class="sub-header">IPv6 Top Hitters</div><div class="table-container table-sources"><table><thead><tr><th>Cnt</th><th>Source</th><th>Info</th></tr></thead><tbody id="tb_ipv6_1y"></tbody></table></div></div>
+                <div><div class="sub-header">Global Targeted Ports</div><div class="table-container"><table><thead><tr><th style="width:60px">Port</th><th>Top Attackers</th><th class="num" style="width:60px">Hits</th></tr></thead><tbody id="tb_ports_1y"></tbody></table></div></div>
+                <div><div class="sub-header">Honeypot/Brute Ports</div><div class="table-container"><table><thead><tr><th style="width:60px">Port</th><th>Top Attackers</th><th class="num" style="width:60px">Hits</th></tr></thead><tbody id="tb_brute_1y"></tbody></table></div></div>
+                <div><div class="sub-header">IPv6 Top Hitters</div><div class="table-container"><table><thead><tr><th style="width:60px">Cnt</th><th>Source</th><th>Info</th></tr></thead><tbody id="tb_ipv6_1y"></tbody></table></div></div>
             </div>
         </div>
 
         <div id="tab_all" class="tab-content">
             <div class="triple-grid">
-                <div><div class="sub-header">Honeypot Victims</div><div class="table-container table-sources"><table><thead><tr><th>Cnt</th><th>Source</th><th>Info</th></tr></thead><tbody id="tb_trap_all"></tbody></table></div></div>
-                <div><div class="sub-header">Static Blocks</div><div class="table-container table-sources"><table><thead><tr><th>Cnt</th><th>Source</th><th>Info</th></tr></thead><tbody id="tb_other_all"></tbody></table></div></div>
-                <div><div class="sub-header">Top Active Subnets</div><div class="table-container table-sources"><table><thead><tr><th>Cnt</th><th>Subnet</th><th>Info</th></tr></thead><tbody id="tb_nets_all"></tbody></table></div></div>
+                <div><div class="sub-header">Honeypot Victims</div><div class="table-container"><table><thead><tr><th style="width:60px">Cnt</th><th>Source</th><th>Info</th></tr></thead><tbody id="tb_trap_all"></tbody></table></div></div>
+                <div><div class="sub-header">Static Blocks</div><div class="table-container"><table><thead><tr><th style="width:60px">Cnt</th><th>Source</th><th>Info</th></tr></thead><tbody id="tb_other_all"></tbody></table></div></div>
+                <div><div class="sub-header">Top Active Subnets</div><div class="table-container"><table><thead><tr><th style="width:60px">Cnt</th><th>Subnet</th><th>Info</th></tr></thead><tbody id="tb_nets_all"></tbody></table></div></div>
             </div>
             <div class="triple-grid" style="margin-top:24px;">
-                <div><div class="sub-header">Global Targeted Ports</div><div class="table-container table-ports"><table><thead><tr><th>Port</th><th>Top Attackers</th><th>Hits</th></tr></thead><tbody id="tb_ports_all"></tbody></table></div></div>
-                <div><div class="sub-header">Honeypot/Brute Ports</div><div class="table-container table-ports"><table><thead><tr><th>Port</th><th>Top Attackers</th><th>Hits</th></tr></thead><tbody id="tb_brute_all"></tbody></table></div></div>
-                <div><div class="sub-header">IPv6 Top Hitters</div><div class="table-container table-sources"><table><thead><tr><th>Cnt</th><th>Source</th><th>Info</th></tr></thead><tbody id="tb_ipv6_all"></tbody></table></div></div>
+                <div><div class="sub-header">Global Targeted Ports</div><div class="table-container"><table><thead><tr><th style="width:60px">Port</th><th>Top Attackers</th><th class="num" style="width:60px">Hits</th></tr></thead><tbody id="tb_ports_all"></tbody></table></div></div>
+                <div><div class="sub-header">Honeypot/Brute Ports</div><div class="table-container"><table><thead><tr><th style="width:60px">Port</th><th>Top Attackers</th><th class="num" style="width:60px">Hits</th></tr></thead><tbody id="tb_brute_all"></tbody></table></div></div>
+                <div><div class="sub-header">IPv6 Top Hitters</div><div class="table-container"><table><thead><tr><th style="width:60px">Cnt</th><th>Source</th><th>Info</th></tr></thead><tbody id="tb_ipv6_all"></tbody></table></div></div>
             </div>
         </div>
     </div>
@@ -342,27 +330,27 @@
         <div class="tables-grid">
             <div>
                 <div class="section-header-wrapper"><div class="section-title">Hourly (Last 24h)<span class="avg-badge" id="avg_hourly"></span></div></div>
-                <div class="table-container"><table><thead><tr><th>Hour</th><th>IPv4</th><th class="col-v6">IPv6</th><th>VPN</th><th>Trap</th><th>Tot</th></tr></thead><tbody id="tb_hourly"></tbody></table></div>
+                <div class="table-container"><table><thead><tr><th>Hour</th><th class="num">IPv4</th><th class="num col-v6">IPv6</th><th class="num">VPN</th><th class="num">Trap</th><th class="num">Tot</th></tr></thead><tbody id="tb_hourly"></tbody></table></div>
             </div>
             <div>
                 <div class="section-header-wrapper"><div class="section-title">Daily (Last 30 Days)<span class="avg-badge" id="avg_daily"></span></div></div>
-                <div class="table-container"><table><thead><tr><th>Date</th><th>IPv4</th><th class="col-v6">IPv6</th><th>VPN</th><th>Trap</th><th>Tot</th></tr></thead><tbody id="tb_daily"></tbody></table></div>
+                <div class="table-container"><table><thead><tr><th>Date</th><th class="num">IPv4</th><th class="num col-v6">IPv6</th><th class="num">VPN</th><th class="num">Trap</th><th class="num">Tot</th></tr></thead><tbody id="tb_daily"></tbody></table></div>
             </div>
         </div>
         <div class="tables-grid">
             <div>
                 <div class="section-header-wrapper"><div class="section-title">Monthly (Last 12 Months)<span class="avg-badge" id="avg_monthly"></span></div></div>
-                <div class="table-container"><table><thead><tr><th>Month</th><th>IPv4</th><th class="col-v6">IPv6</th><th>VPN</th><th>Trap</th><th>Tot</th></tr></thead><tbody id="tb_monthly"></tbody></table></div>
+                <div class="table-container"><table><thead><tr><th>Month</th><th class="num">IPv4</th><th class="num col-v6">IPv6</th><th class="num">VPN</th><th class="num">Trap</th><th class="num">Tot</th></tr></thead><tbody id="tb_monthly"></tbody></table></div>
             </div>
             <div>
                 <div class="section-header-wrapper"><div class="section-title">Yearly History<span class="avg-badge" id="avg_yearly"></span></div></div>
-                <div class="table-container"><table><thead><tr><th>Year</th><th>IPv4</th><th class="col-v6">IPv6</th><th>VPN</th><th>Trap</th><th>Tot</th></tr></thead><tbody id="tb_yearly"></tbody></table></div>
+                <div class="table-container"><table><thead><tr><th>Year</th><th class="num">IPv4</th><th class="num col-v6">IPv6</th><th class="num">VPN</th><th class="num">Trap</th><th class="num">Tot</th></tr></thead><tbody id="tb_yearly"></tbody></table></div>
             </div>
         </div>
         <div class="tables-grid">
             <div style="grid-column: 1 / -1;">
                 <div class="section-header-wrapper"><div class="section-title">Top 10 Days by Volume (All Time)</div></div>
-                <div class="table-container"><table><thead><tr><th>Date</th><th>IPv4</th><th class="col-v6">IPv6</th><th>VPN</th><th>Trap</th><th>Total</th></tr></thead><tbody id="tb_top_days"></tbody></table></div>
+                <div class="table-container"><table><thead><tr><th>Date</th><th class="num">IPv4</th><th class="num col-v6">IPv6</th><th class="num">VPN</th><th class="num">Trap</th><th class="num">Total</th></tr></thead><tbody id="tb_top_days"></tbody></table></div>
             </div>
         </div>
     </div>
