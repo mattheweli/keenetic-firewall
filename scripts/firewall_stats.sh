@@ -1,13 +1,15 @@
 #!/bin/sh
 
 # ==============================================================================
-# KEENETIC FIREWALL STATS v3.5.4 (EMAIL INTEGRATION)
+# KEENETIC FIREWALL STATS v3.5.5 (EMAIL INTEGRATION)
 # ==============================================================================
 # AUTHOR: mattheweli
 # DESCRIPTION: 
 #   Aggregates firewall statistics, parses sniffer data for port mapping,
 #   and generates JSON data for the web dashboard.
 #
+#     - Fix on automatic email report
+#     - Removed VACUUM on DB optimization
 #     - CRITICAL FIX: ulogd PCAP rotation file
 #	  - NEW: Database and sniffer analysis optimized   
 #     - NEW: Added email reporting module
@@ -729,7 +731,6 @@ DROP TABLE ip_drops_rollup;
 DELETE FROM ip_drops WHERE timestamp < $THIRTY_DAYS AND count <= 3;
 
 COMMIT;
-VACUUM;
 "
 
 DB_SIZE_H=$(du -h "$DB_FILE" 2>/dev/null | awk '{print $1}')
@@ -752,6 +753,7 @@ TOTAL_NEW_DROPS=$((NEW_DROPS_V4 + NEW_DROPS_V6 + NEW_DROPS_VPN + NEW_DROPS_TRAP)
 send_report() {
     EMAIL_MOD="/opt/bin/email_sender.mod"
     TIMESTAMP_FILE="/opt/etc/keentool/fw_last_report.ts"
+    FORCE_MODE=$1
     
     # 1. Check if Email Module exists
     if [ ! -x "$EMAIL_MOD" ]; then
@@ -761,32 +763,38 @@ send_report() {
 
     NOW=$(date +%s)
 
-    # 2. Determine Time Interval (Start Time)
-    # Logic: We read the timestamp of the last report sent.
-    # If it's the first run ever, we default to the last 24 hours.
-    if [ -f "$TIMESTAMP_FILE" ]; then
-        START_TIME=$(cat "$TIMESTAMP_FILE")
-    else
-        START_TIME=$((NOW - 86400))
-    fi
-
-    # Sanity Check: If the last report was > 30 days ago, cap the query at 30 days
-    # to prevent database performance issues.
-    if [ $((NOW - START_TIME)) -gt 2592000 ]; then
-        START_TIME=$((NOW - 2592000))
-    fi
-
-    # 3. Determine Report Label (Daily vs Weekly)
-    DIFF_SEC=$((NOW - START_TIME))
-    DIFF_HOURS=$((DIFF_SEC / 3600))
-    
-    # Thresholds: >160h (approx 7 days) = Weekly, >20h = Daily
-    if [ "$DIFF_HOURS" -ge 160 ]; then
+    # 2. Determine Time Interval
+    if [ "$FORCE_MODE" = "weekly" ]; then
+        START_TIME=$((NOW - 604800))
         PERIOD_LABEL="Weekly"
-    elif [ "$DIFF_HOURS" -ge 20 ]; then
+        DIFF_HOURS=168
+    elif [ "$FORCE_MODE" = "daily" ]; then
+        START_TIME=$((NOW - 86400))
         PERIOD_LABEL="Daily"
+        DIFF_HOURS=24
     else
-        PERIOD_LABEL="Periodic (${DIFF_HOURS}h)"
+        # Adaptive logic based on timestamp file
+        if [ -f "$TIMESTAMP_FILE" ]; then
+            START_TIME=$(cat "$TIMESTAMP_FILE")
+        else
+            START_TIME=$((NOW - 86400))
+        fi
+
+        # Sanity Check: Max 30 days
+        if [ $((NOW - START_TIME)) -gt 2592000 ]; then
+            START_TIME=$((NOW - 2592000))
+        fi
+
+        DIFF_SEC=$((NOW - START_TIME))
+        DIFF_HOURS=$((DIFF_SEC / 3600))
+        
+        if [ "$DIFF_HOURS" -ge 160 ]; then
+            PERIOD_LABEL="Weekly"
+        elif [ "$DIFF_HOURS" -ge 20 ]; then
+            PERIOD_LABEL="Daily"
+        else
+            PERIOD_LABEL="Periodic (${DIFF_HOURS}h)"
+        fi
     fi
 
     echo " -> Generating $PERIOD_LABEL Report (covering last $DIFF_HOURS hours)..."
@@ -797,22 +805,24 @@ send_report() {
     DROPS_COUNT=$(sqlite3 "$DB_FILE" "SELECT sum(count) FROM drops WHERE timestamp > $START_TIME;")
     [ -z "$DROPS_COUNT" ] && DROPS_COUNT="0"
     
-    # Top 5 Attackers (IPs)
-    TOP_ATTACKERS=$(sqlite3 -separator " - " "$DB_FILE" "SELECT count, ip FROM ip_drops WHERE timestamp > $START_TIME GROUP BY ip ORDER BY count DESC LIMIT 5;" | awk '{print " - " $0 " hits"}')
-    [ -z "$TOP_ATTACKERS" ] && TOP_ATTACKERS=" (No attacks recorded)"
+    # Top 5 Attackers (IPs) - FIXED: SUM(count) for compressed tables
+    TOP_ATTACKERS=$(sqlite3 -separator " - " "$DB_FILE" "SELECT SUM(count), ip FROM ip_drops WHERE timestamp > $START_TIME GROUP BY ip ORDER BY SUM(count) DESC LIMIT 5;" | awk '{print " - " $0 " hits"}')
+    [ -z "$TOP_ATTACKERS" ] && TOP_ATTACKERS=" - No attacks recorded"
     
     # Top 3 Targeted Ports
     TOP_PORTS=$(sqlite3 "$DB_FILE" "SELECT i.target_port, sum(d.count) as c FROM ip_drops d JOIN ip_info i ON d.ip=i.ip WHERE d.timestamp > $START_TIME AND i.target_port IS NOT NULL GROUP BY i.target_port ORDER BY c DESC LIMIT 3;" | awk -F'|' '{print " - Port " $1 ": " $2 " hits"}')
-    [ -z "$TOP_PORTS" ] && TOP_PORTS=" (No specific ports targeted)"
+    [ -z "$TOP_PORTS" ] && TOP_PORTS=" - No specific ports targeted"
 
-    # Current List Sizes (Variables inherited from main script execution)
-    # We use default expansion :-0 in case variables are empty
     L_MAIN=${SIZE_FirewallBlock:-0}
     L_TRAP=${SIZE_AutoBan:-0}
     
-    # Format Readable Dates
-    DATE_FROM=$(date -d @$START_TIME "+%d/%m %H:%M")
-    DATE_TO=$(date -d @$NOW "+%d/%m %H:%M")
+    # Format Readable Dates safely
+    if date --help 2>&1 | grep -q 'BusyBox'; then
+        DATE_FROM=$(date -D %s -d "$START_TIME" +"%d/%m %H:%0M" 2>/dev/null || date +"%d/%m %H:%M" -d "@$START_TIME")
+    else
+        DATE_FROM=$(date -d "@$START_TIME" "+%d/%m %H:%M")
+    fi
+    DATE_TO=$(date "+%d/%m %H:%M")
 
     # 5. Construct Email Body
     MSG="Firewall $PERIOD_LABEL Report
@@ -833,7 +843,6 @@ $TOP_PORTS
 Generated by Keenetic Firewall Stats"
 
     # 6. Update Timestamp
-    # We save the current time so the next report will start counting from now.
     mkdir -p "$(dirname "$TIMESTAMP_FILE")"
     echo "$NOW" > "$TIMESTAMP_FILE"
 
@@ -843,7 +852,7 @@ Generated by Keenetic Firewall Stats"
 
 # Check CLI Arguments
 if [ "$1" = "-report" ]; then
-    send_report
+    send_report "$2"
     exit 0
 fi
 
