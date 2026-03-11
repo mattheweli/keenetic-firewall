@@ -1,13 +1,14 @@
 #!/bin/sh
 
 # ==============================================================================
-# KEENETIC FIREWALL STATS v3.5.6 (EMAIL INTEGRATION)
+# KEENETIC FIREWALL STATS v3.5.7 (EMAIL INTEGRATION)
 # ==============================================================================
 # AUTHOR: mattheweli
 # DESCRIPTION: 
 #   Aggregates firewall statistics, parses sniffer data for port mapping,
 #   and generates JSON data for the web dashboard.
 #
+#     - FIX: Database creation adn optimization on first boot
 #     - FIX: Send report minor cosmetic changes 
 #     - Fix on automatic email report
 #     - Removed VACUUM on DB optimization
@@ -103,17 +104,20 @@ echo "=== Firewall Stats Updater v3.5.4 ==="
 # ==============================================================================
 # 3. DATABASE INITIALIZATION & TUNING
 # ==============================================================================
-# Abilita ottimizzazioni SQLite ad alte prestazioni (WAL mode, memory temp store)
+# Enable high-performance SQLite optimizations (WAL mode, memory temp store)
 sqlite3 "$DB_FILE" "PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA temp_store = MEMORY;"
 
-if [ ! -f "$DB_FILE" ]; then
-    echo " -> Initializing Database Schema..."
+# Verify if the DB has the correct structure (not just if the file exists)
+HAS_DROPS=$(sqlite3 "$DB_FILE" "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='drops';" 2>/dev/null)
+
+if [ "$HAS_DROPS" != "1" ]; then
+    echo " -> Initializing Database Schema (or fixing corrupted DB)..."
     # Table: drops (Global counters history)
-    sqlite3 "$DB_FILE" "CREATE TABLE drops (id INTEGER PRIMARY KEY, timestamp INTEGER, list_name TEXT, count INTEGER); CREATE INDEX idx_ts ON drops(timestamp);"
+    sqlite3 "$DB_FILE" "CREATE TABLE IF NOT EXISTS drops (id INTEGER PRIMARY KEY, timestamp INTEGER, list_name TEXT, count INTEGER); CREATE INDEX IF NOT EXISTS idx_ts ON drops(timestamp);"
     # Table: ip_drops (Individual IP hit events)
-    sqlite3 "$DB_FILE" "CREATE TABLE ip_drops (timestamp INTEGER, ip TEXT, count INTEGER, list_type TEXT); CREATE INDEX idx_ip_ts ON ip_drops(timestamp); CREATE INDEX idx_list ON ip_drops(list_type); CREATE INDEX idx_ip ON ip_drops(ip);"
+    sqlite3 "$DB_FILE" "CREATE TABLE IF NOT EXISTS ip_drops (timestamp INTEGER, ip TEXT, count INTEGER, list_type TEXT); CREATE INDEX IF NOT EXISTS idx_ip_ts ON ip_drops(timestamp); CREATE INDEX IF NOT EXISTS idx_list ON ip_drops(list_type); CREATE INDEX IF NOT EXISTS idx_ip ON ip_drops(ip);"
     # Table: ip_info (Geo-data, Risk Score, Domain)
-    sqlite3 "$DB_FILE" "CREATE TABLE ip_info (ip TEXT PRIMARY KEY, country TEXT, risk INTEGER, domain TEXT, updated INTEGER, target_port INTEGER, port_history TEXT); CREATE INDEX idx_port ON ip_info(target_port);"
+    sqlite3 "$DB_FILE" "CREATE TABLE IF NOT EXISTS ip_info (ip TEXT PRIMARY KEY, country TEXT, risk INTEGER, domain TEXT, updated INTEGER, target_port INTEGER, port_history TEXT); CREATE INDEX IF NOT EXISTS idx_port ON ip_info(target_port);"
 else
     # --- MIGRATION CHECKS ---
     
@@ -868,4 +872,5 @@ fi
 
 logger -t "$LOG_TAG" "SUMMARY | Drops: +$TOTAL_NEW_DROPS | Trap4: $T4_TOT ($T4_DIF) | Trap6: $T6_TOT ($T6_DIF) | Ports: $COUNT_UPDATED | DB: $DB_SIZE_H"
 echo "Done."
+
 
