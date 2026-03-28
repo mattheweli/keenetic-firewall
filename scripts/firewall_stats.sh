@@ -1,26 +1,20 @@
 #!/bin/sh
 
 # ==============================================================================
-# KEENETIC FIREWALL STATS v3.5.7 (EMAIL INTEGRATION)
+# KEENETIC FIREWALL STATS v3.6.0 (GEO-IP INTEGRATION)
 # ==============================================================================
 # AUTHOR: mattheweli
 # DESCRIPTION: 
 #   Aggregates firewall statistics, parses sniffer data for port mapping,
 #   and generates JSON data for the web dashboard.
 #
-#     - FIX: Database creation adn optimization on first boot
+#     - NEW: GeoIP Blocking integration (GeoBlock & GeoBlock6 support)
+#     - FIX: IPv6 regex counting fixed for lists
+#     - FIX: Database creation and optimization on first boot
 #     - FIX: Send report minor cosmetic changes 
-#     - Fix on automatic email report
-#     - Removed VACUUM on DB optimization
 #     - CRITICAL FIX: ulogd PCAP rotation file
-#	  - NEW: Database and sniffer analysis optimized   
-#     - NEW: Added email reporting module
-#     - FIX: WAN sniffer process optimized
 #     - OPT: Limited tooltip port list in JS to max 20 entries to reduce file size.
 #     - LOGIC: Honeypot tables now strictly enforce TCP/UDP protocol matching
-#       based on firewall_manager configuration
-#     - FIX: Database migration process fixed
-#     - LOGIC: Sniffer execution moved BEFORE JSON generation for real-time updates.
 #     - CORE: Implemented robust "Linux Cooked" (SLL) header parsing for tcpdump.
 # ==============================================================================
 
@@ -63,9 +57,11 @@ TRAP_SQL_LIST=$(echo "$ALL_TRAP_PORTS" | tr -s ' ' ',' | sed 's/^,//;s/,$//')
 # Define Firewall Targets (IPv4/IPv6)
 IPTABLES_CMD="iptables"; IP6TABLES_CMD="ip6tables"
 if [ "$ENABLE_IPV6" = "true" ]; then
-    TARGETS="FirewallBlock|$IPTABLES_CMD| FirewallBlock6|$IP6TABLES_CMD|6 VPNBlock|$IPTABLES_CMD|"
+    # Added GeoBlock and GeoBlock6 to the tracking targets
+    TARGETS="FirewallBlock|$IPTABLES_CMD| FirewallBlock6|$IP6TABLES_CMD|6 VPNBlock|$IPTABLES_CMD| GeoBlock|$IPTABLES_CMD| GeoBlock6|$IP6TABLES_CMD|6"
 else
-    TARGETS="FirewallBlock|$IPTABLES_CMD| VPNBlock|$IPTABLES_CMD|"
+    # Added GeoBlock to the tracking targets (IPv4 only)
+    TARGETS="FirewallBlock|$IPTABLES_CMD| VPNBlock|$IPTABLES_CMD| GeoBlock|$IPTABLES_CMD|"
 fi
 
 # ==============================================================================
@@ -80,6 +76,11 @@ DIFF_FILE_TRAP="/opt/etc/firewall_trap_diff.dat"
 TRAP_SIZE_FILE="/opt/etc/firewall_trap_last_size.dat"
 DIFF_FILE_TRAP6="/opt/etc/firewall_trap6_diff.dat"
 TRAP6_SIZE_FILE="/opt/etc/firewall_trap6_last_size.dat"
+# GeoIP state files
+DIFF_FILE_GEO="/opt/etc/firewall_geo_diff.dat"
+GEO_SIZE_FILE="/opt/etc/firewall_geo_last_size.dat"
+DIFF_FILE_GEO6="/opt/etc/firewall_geo6_diff.dat"
+GEO6_SIZE_FILE="/opt/etc/firewall_geo6_last_size.dat"
 IP_LAST_STATE="/opt/etc/firewall_ip_counters.dat"
 
 # Load AbuseIPDB Key
@@ -95,11 +96,11 @@ rm -f "$LIST_DIR"/*.txt
 DATE_CMD="/opt/bin/date"; [ ! -x "$DATE_CMD" ] && DATE_CMD="date"
 NOW=$($DATE_CMD +%s)
 
-# Initialize counters for logging
-NEW_DROPS_V4=0; NEW_DROPS_V6=0; NEW_DROPS_VPN=0; NEW_DROPS_TRAP=0; NEW_DROPS_TRAP6=0
+# Initialize counters for logging (Added NEW_DROPS_GEO and GEO6)
+NEW_DROPS_V4=0; NEW_DROPS_V6=0; NEW_DROPS_VPN=0; NEW_DROPS_TRAP=0; NEW_DROPS_TRAP6=0; NEW_DROPS_GEO=0; NEW_DROPS_GEO6=0
 NEW_IP_RECORDS=0
 
-echo "=== Firewall Stats Updater v3.5.4 ==="
+echo "=== Firewall Stats Updater v3.6.0 ==="
 
 # ==============================================================================
 # 3. DATABASE INITIALIZATION & TUNING
@@ -187,11 +188,14 @@ for TARGET in $TARGETS; do
         [ "$SET_NAME" = "FirewallBlock" ] && NEW_DROPS_V4=$DELTA
         [ "$SET_NAME" = "FirewallBlock6" ] && NEW_DROPS_V6=$DELTA
         [ "$SET_NAME" = "VPNBlock" ] && NEW_DROPS_VPN=$DELTA
+        # Capture GeoIP drops
+        [ "$SET_NAME" = "GeoBlock" ] && NEW_DROPS_GEO=$DELTA
+        [ "$SET_NAME" = "GeoBlock6" ] && NEW_DROPS_GEO6=$DELTA
     fi
     echo "$CUR" > "$LAST_RUN_FILE"
     
-    # Get current IPSet size
-    SIZE=$(ipset list "$SET_NAME" 2>/dev/null | grep -cE '^[0-9]')
+    # IPv4 + IPv6 Regex fix for correct size counting
+    SIZE=$(ipset list "$SET_NAME" 2>/dev/null | grep -cE '^[0-9a-fA-F]')
     eval "SIZE_${SET_NAME}=${SIZE:-0}"
 done
 
@@ -257,6 +261,9 @@ if [ "$ENABLE_IPV6" = "true" ]; then DIFF_V6=$(read_file "$DIFF_FILE_V6"); else 
 DIFF_VPN=$(read_file "$DIFF_FILE_VPN")
 DIFF_TRAP=$(calc_diff "$SIZE_AutoBan" "$TRAP_SIZE_FILE" "$DIFF_FILE_TRAP")
 DIFF_TRAP6=$(calc_diff "$SIZE_AutoBan6" "$TRAP6_SIZE_FILE" "$DIFF_FILE_TRAP6")
+# Read diffs for GeoIP sets (Calculated by update_blocklist)
+DIFF_GEO=$(read_file "$DIFF_FILE_GEO")
+if [ "$ENABLE_IPV6" = "true" ]; then DIFF_GEO6=$(read_file "$DIFF_FILE_GEO6"); else DIFF_GEO6="=0"; fi
 
 # ==============================================================================
 # 7. IP PACKET PROCESSING (PER-IP HITS)
@@ -271,9 +278,13 @@ SQL_IMPORT="/tmp/ip_inserts.sql"
     ipset list FirewallBlock 2>/dev/null | grep "packets" | sed -n 's/^\([^ ]*\) .*packets \([0-9]*\) .*/\1 \2 main/p' | awk '$2 > 0'
     ipset list VPNBlock 2>/dev/null | grep "packets" | sed -n 's/^\([^ ]*\) .*packets \([0-9]*\) .*/\1 \2 main/p' | awk '$2 > 0'
     ipset list AutoBan 2>/dev/null | grep -E '^[0-9]{1,3}\.' | sed -n 's/^\([^ ]*\) .*packets \([0-9]*\) .*/\1 \2 trap/p' | awk '$2 > 0'
+    # Extract GeoIP packets and tag them as 'geo'
+    ipset list GeoBlock 2>/dev/null | grep "packets" | sed -n 's/^\([^ ]*\) .*packets \([0-9]*\) .*/\1 \2 geo/p' | awk '$2 > 0'
     if [ "$ENABLE_IPV6" = "true" ]; then
         ipset list FirewallBlock6 2>/dev/null | grep "packets" | sed -n 's/^\([^ ]*\) .*packets \([0-9]*\) .*/\1 \2 main/p' | awk '$2 > 0'
         ipset list AutoBan6 2>/dev/null | grep -E ':' | sed -n 's/^\([^ ]*\) .*packets \([0-9]*\) .*/\1 \2 trap/p' | awk '$2 > 0'
+        # Extract GeoBlock6 packets
+        ipset list GeoBlock6 2>/dev/null | grep "packets" | sed -n 's/^\([^ ]*\) .*packets \([0-9]*\) .*/\1 \2 geo/p' | awk '$2 > 0'
     fi
 } | sort > "$CURRENT_DUMP"
 
@@ -451,8 +462,8 @@ TOTAL_DROPS_ALL_TIME=$(sqlite3 "$DB_FILE" "SELECT sum(count) FROM drops;")
 
 # Helper to generate Time Series Rows
 gen_html_rows() {
-    QUERY="SELECT $1, SUM(CASE WHEN list_name='FirewallBlock' THEN count ELSE 0 END), SUM(CASE WHEN list_name='FirewallBlock6' THEN count ELSE 0 END), SUM(CASE WHEN list_name='VPNBlock' THEN count ELSE 0 END), SUM(CASE WHEN list_name='AutoBan' OR list_name='AutoBan6' THEN count ELSE 0 END), SUM(count) FROM drops $3 GROUP BY $2 ORDER BY MAX(timestamp) DESC;"
-    sqlite3 -separator "|" "$DB_FILE" "$QUERY" | awk -F'|' '{print "<tr><td>"$1"</td><td class=\"num col-main\">+"$2"</td><td class=\"num col-v6\">+"$3"</td><td class=\"num col-vpn\">+"$4"</td><td class=\"num col-trap\">+"$5"</td><td class=\"num\">+"$6"</td></tr>"}'
+    QUERY="SELECT $1, SUM(CASE WHEN list_name='FirewallBlock' THEN count ELSE 0 END), SUM(CASE WHEN list_name='FirewallBlock6' THEN count ELSE 0 END), SUM(CASE WHEN list_name='VPNBlock' THEN count ELSE 0 END), SUM(CASE WHEN list_name='AutoBan' OR list_name='AutoBan6' THEN count ELSE 0 END), SUM(CASE WHEN list_name='GeoBlock' OR list_name='GeoBlock6' THEN count ELSE 0 END), SUM(count) FROM drops $3 GROUP BY $2 ORDER BY MAX(timestamp) DESC;"
+    sqlite3 -separator "|" "$DB_FILE" "$QUERY" | awk -F'|' '{print "<tr><td>"$1"</td><td class=\"num col-main\">+"$2"</td><td class=\"num col-v6\">+"$3"</td><td class=\"num col-vpn\">+"$4"</td><td class=\"num col-trap\">+"$5"</td><td class=\"num col-geo\">+"$6"</td><td class=\"num\">+"$7"</td></tr>"}'
 }
 
 # Helper to get Averages
@@ -650,13 +661,19 @@ TRAP_ALL=$(get_ip_table "d.list_type='trap'")
 OTHER_ALL=$(get_ip_table "d.list_type='main' AND d.ip NOT LIKE '%/%'")
 NETS_ALL=$(get_ip_table "d.list_type='main' AND d.ip LIKE '%/%'")
 
+# --- Added GeoIP Tables ---
+GEO_24H=$(get_ip_table "d.list_type='geo' AND d.timestamp > $((NOW - 86400))")
+GEO_30D=$(get_ip_table "d.list_type='geo' AND d.timestamp > $((NOW - 2592000))")
+GEO_1Y=$(get_ip_table "d.list_type='geo' AND d.timestamp > $((NOW - 31536000))")
+GEO_ALL=$(get_ip_table "d.list_type='geo'")
+
 # Time Series Data
 ROWS_HOURLY=$(gen_html_rows "strftime('%H:00', timestamp, 'unixepoch', 'localtime')" "1" "WHERE timestamp >= strftime('%s', 'now', '-24 hours')")
 ROWS_DAILY=$(gen_html_rows "strftime('%d-%m-%Y', timestamp, 'unixepoch', 'localtime')" "1" "WHERE timestamp >= strftime('%s', 'now', '-30 days')")
 ROWS_MONTHLY=$(gen_html_rows "strftime('%m-%Y', timestamp, 'unixepoch', 'localtime')" "1" "WHERE timestamp >= strftime('%s', 'now', '-12 months')")
 ROWS_YEARLY=$(gen_html_rows "strftime('%Y', timestamp, 'unixepoch', 'localtime')" "1" "")
-QUERY_TOP="SELECT strftime('%d-%m-%Y', timestamp, 'unixepoch', 'localtime') as day, SUM(CASE WHEN list_name='FirewallBlock' THEN count ELSE 0 END), SUM(CASE WHEN list_name='FirewallBlock6' THEN count ELSE 0 END), SUM(CASE WHEN list_name='VPNBlock' THEN count ELSE 0 END), SUM(CASE WHEN list_name='AutoBan' OR list_name='AutoBan6' THEN count ELSE 0 END), SUM(count) as total FROM drops GROUP BY day ORDER BY total DESC LIMIT 10;"
-ROWS_TOP_DAYS=$(sqlite3 -separator "|" "$DB_FILE" "$QUERY_TOP" | awk -F'|' '{print "<tr><td><b>"$1"</b></td><td class=\"num col-main\">+"$2"</td><td class=\"num col-v6\">+"$3"</td><td class=\"num col-vpn\">+"$4"</td><td class=\"num col-trap\">+"$5"</td><td class=\"num\">+"$6"</td></tr>"}')
+QUERY_TOP="SELECT strftime('%d-%m-%Y', timestamp, 'unixepoch', 'localtime') as day, SUM(CASE WHEN list_name='FirewallBlock' THEN count ELSE 0 END), SUM(CASE WHEN list_name='FirewallBlock6' THEN count ELSE 0 END), SUM(CASE WHEN list_name='VPNBlock' THEN count ELSE 0 END), SUM(CASE WHEN list_name='AutoBan' OR list_name='AutoBan6' THEN count ELSE 0 END), SUM(CASE WHEN list_name='GeoBlock' OR list_name='GeoBlock6' THEN count ELSE 0 END), SUM(count) as total FROM drops GROUP BY day ORDER BY total DESC LIMIT 10;"
+ROWS_TOP_DAYS=$(sqlite3 -separator "|" "$DB_FILE" "$QUERY_TOP" | awk -F'|' '{print "<tr><td><b>"$1"</b></td><td class=\"num col-main\">+"$2"</td><td class=\"num col-v6\">+"$3"</td><td class=\"num col-vpn\">+"$4"</td><td class=\"num col-trap\">+"$5"</td><td class=\"num col-geo\">+"$6"</td><td class=\"num\">+"$7"</td></tr>"}')
 
 # Averages
 AVG_H=$(get_avg "strftime('%H:00', timestamp, 'unixepoch', 'localtime')" "WHERE timestamp >= strftime('%s', 'now', '-24 hours')")
@@ -664,11 +681,11 @@ AVG_D=$(get_avg "strftime('%d-%m-%Y', timestamp, 'unixepoch', 'localtime')" "WHE
 AVG_M=$(get_avg "strftime('%m-%Y', timestamp, 'unixepoch', 'localtime')" "WHERE timestamp >= strftime('%s', 'now', '-12 months')")
 AVG_Y=$(get_avg "strftime('%Y', timestamp, 'unixepoch', 'localtime')" "")
 
-# Misc Stats
+# Misc Stats (Added S_GEO and S_GEO6)
 DATE_UPDATE=$($DATE_CMD "+%d-%m-%Y %H:%M:%S"); UP_SECONDS=$(cut -d. -f1 /proc/uptime)
 DAYS=$((UP_SECONDS / 86400)); HOURS=$(( (UP_SECONDS % 86400) / 3600 ))
 UPTIME="${DAYS}d ${HOURS}h"
-S_MAIN=${SIZE_FirewallBlock:-0}; S_MAIN6=${SIZE_FirewallBlock6:-0}; S_VPN=${SIZE_VPNBlock:-0}; S_TRAP=${SIZE_AutoBan:-0}; S_TRAP6=${SIZE_AutoBan6:-0}
+S_MAIN=${SIZE_FirewallBlock:-0}; S_MAIN6=${SIZE_FirewallBlock6:-0}; S_VPN=${SIZE_VPNBlock:-0}; S_TRAP=${SIZE_AutoBan:-0}; S_TRAP6=${SIZE_AutoBan6:-0}; S_GEO=${SIZE_GeoBlock:-0}; S_GEO6=${SIZE_GeoBlock6:-0}
 
 # Assemble JS File (Atomic Write to Temp File first)
 cat <<EOF > "$TEMP_DATA_FILE"
@@ -678,15 +695,16 @@ window.FW_DATA = {
     lists: { 
         main: "$S_MAIN", diff_v4: "$DIFF_V4", main6: "$S_MAIN6", diff_v6: "$DIFF_V6", 
         vpn: "$S_VPN", diff_vpn: "$DIFF_VPN", trap_ips: "$S_TRAP", diff_trap: "$DIFF_TRAP",
-        trap6_ips: "$S_TRAP6", diff_trap6: "$DIFF_TRAP6"
+        trap6_ips: "$S_TRAP6", diff_trap6: "$DIFF_TRAP6", geo: "$S_GEO", diff_geo: "$DIFF_GEO",
+        geo6: "$S_GEO6", diff_geo6: "$DIFF_GEO6"
     },
     averages: { hourly: "$AVG_H", daily: "$AVG_D", monthly: "$AVG_M", yearly: "$AVG_Y" },
     tables: { 
         hourly: \`$ROWS_HOURLY\`, daily: \`$ROWS_DAILY\`, monthly: \`$ROWS_MONTHLY\`, yearly: \`$ROWS_YEARLY\`, top_days: \`$ROWS_TOP_DAYS\`,
-        trap_24h: \`$TRAP_24H\`, other_24h: \`$OTHER_24H\`, nets_24h: \`$NETS_24H\`, ports_24h: \`$PORTS_24H\`, brute_24h: \`$BRUTE_24H\`, ipv6_24h: \`$IPV6_24H\`,
-        trap_30d: \`$TRAP_30D\`, other_30d: \`$OTHER_30D\`, nets_30d: \`$NETS_30D\`, ports_30d: \`$PORTS_30D\`, brute_30d: \`$BRUTE_30D\`, ipv6_30d: \`$IPV6_30D\`,
-        trap_1y: \`$TRAP_1Y\`, other_1y: \`$OTHER_1Y\`, nets_1y: \`$NETS_1Y\`, ports_1y: \`$PORTS_1Y\`, brute_1y: \`$BRUTE_1Y\`, ipv6_1y: \`$IPV6_1Y\`,
-        trap_all: \`$TRAP_ALL\`, other_all: \`$OTHER_ALL\`, nets_all: \`$NETS_ALL\`, ports_all: \`$PORTS_ALL\`, brute_all: \`$BRUTE_ALL\`, ipv6_all: \`$IPV6_ALL\`
+        trap_24h: \`$TRAP_24H\`, other_24h: \`$OTHER_24H\`, nets_24h: \`$NETS_24H\`, ports_24h: \`$PORTS_24H\`, brute_24h: \`$BRUTE_24H\`, ipv6_24h: \`$IPV6_24H\`, geo_24h: \`$GEO_24H\`,
+        trap_30d: \`$TRAP_30D\`, other_30d: \`$OTHER_30D\`, nets_30d: \`$NETS_30D\`, ports_30d: \`$PORTS_30D\`, brute_30d: \`$BRUTE_30D\`, ipv6_30d: \`$IPV6_30D\`, geo_30d: \`$GEO_30D\`,
+        trap_1y: \`$TRAP_1Y\`, other_1y: \`$OTHER_1Y\`, nets_1y: \`$NETS_1Y\`, ports_1y: \`$PORTS_1Y\`, brute_1y: \`$BRUTE_1Y\`, ipv6_1y: \`$IPV6_1Y\`, geo_1y: \`$GEO_1Y\`,
+        trap_all: \`$TRAP_ALL\`, other_all: \`$OTHER_ALL\`, nets_all: \`$NETS_ALL\`, ports_all: \`$PORTS_ALL\`, brute_all: \`$BRUTE_ALL\`, ipv6_all: \`$IPV6_ALL\`, geo_all: \`$GEO_ALL\`
     }
 };
 EOF
@@ -824,8 +842,9 @@ send_report() {
 
     L_MAIN=${SIZE_FirewallBlock:-0}
     L_TRAP=${SIZE_AutoBan:-0}
+    # Calculate total GeoIP subnets (v4 + v6)
+    L_GEO=$((${SIZE_GeoBlock:-0} + ${SIZE_GeoBlock6:-0}))
     
-    # Calcolo dimensione del database in formato leggibile (MB/KB)
     DB_SIZE_H=$(du -h "$DB_FILE" 2>/dev/null | awk '{print $1}')
     [ -z "$DB_SIZE_H" ] && DB_SIZE_H="N/A"
     
@@ -837,7 +856,7 @@ send_report() {
     fi
     DATE_TO=$(date "+%d/%m %H:%M")
 
-    # 5. Construct Email Body
+    # 5. Construct Email Body (Added GeoIP Blocks line)
     MSG="Firewall $PERIOD_LABEL Report
 Period: $DATE_FROM to $DATE_TO
     
@@ -852,6 +871,7 @@ $TOP_PORTS
 📊 Database Status:
  - Blacklist Size: $L_MAIN IPs
  - AutoBan (Trap): $L_TRAP IPs
+ - GeoIP Blocks: $L_GEO Subnets
  - Database Size: $DB_SIZE_H
  
 Generated by Keenetic Firewall Stats"
@@ -870,7 +890,6 @@ if [ "$1" = "-report" ]; then
     exit 0
 fi
 
-logger -t "$LOG_TAG" "SUMMARY | Drops: +$TOTAL_NEW_DROPS | Trap4: $T4_TOT ($T4_DIF) | Trap6: $T6_TOT ($T6_DIF) | Ports: $COUNT_UPDATED | DB: $DB_SIZE_H"
+# Log summary to Syslog including GeoBlock size
+logger -t "$LOG_TAG" "SUMMARY | Drops: +$TOTAL_NEW_DROPS | Trap4: $T4_TOT ($T4_DIF) | Trap6: $T6_TOT ($T6_DIF) | Geo: $SIZE_GeoBlock | Ports: $COUNT_UPDATED | DB: $DB_SIZE_H"
 echo "Done."
-
-
