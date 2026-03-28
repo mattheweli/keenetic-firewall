@@ -1,9 +1,11 @@
 #!/bin/sh
 
 # ==============================================================================
-# KEENETIC FIREWALL HOOK v2.7.0 (GRANULAR WHITELISTS)
+# KEENETIC FIREWALL HOOK v2.8.0 (GEO-IP INTEGRATION)
 # Description: Dual-Stack Firewall with Auto-Ban, Connlimit & Port Logging.
 # Features:
+#   - NEW: GeoIP Blocking integration (Kernel-level drops for banned countries).
+#   - NEW: DDoS Mitigation with Global & Custom Bypass ConnLimits
 #   - NEW: Sub-chain architecture (FW_CHK_CONN, FW_CHK_BRUTE) for granular bypass.
 #   - NEW: ConnLimit and BruteForce protections now apply to UDP services as well.
 #   - FIX: load_mod grep mode change
@@ -74,6 +76,7 @@ fi
 : ${ENABLE_FWD_PROTECTION:="false"}
 : ${BF_SECONDS:="60"}
 : ${BF_HITCOUNT:="5"}
+: ${CONNLIMIT_CUSTOM:="150"}
 
 # Granular Bypass Fallbacks
 : ${BYPASS_CONN_TCP:=""}
@@ -137,6 +140,16 @@ if ! ipset list -n "$IPSET_VPN" >/dev/null 2>&1; then
     ipset create "$IPSET_VPN" hash:ip hashsize 1024 maxelem 65536 counters -exist
     if [ -f "$VPN_BANNED_FILE" ]; then
         while read -r ip; do [ -n "$ip" ] && ipset add "$IPSET_VPN" "$ip" -exist; done < "$VPN_BANNED_FILE"
+    fi
+fi
+
+# GeoIP Block (IPv4 & IPv6)
+if ! ipset list -n GeoBlock >/dev/null 2>&1; then
+    ipset create GeoBlock hash:net hashsize 1024 maxelem 262144 counters -exist
+fi
+if [ "$ENABLE_IPV6" = "true" ]; then
+    if ! ipset list -n GeoBlock6 >/dev/null 2>&1; then
+        ipset create GeoBlock6 hash:net family inet6 hashsize 1024 maxelem 262144 counters -exist
     fi
 fi
 
@@ -215,6 +228,14 @@ if ipset list -n "$IPSET_VPN" >/dev/null 2>&1; then
     iptables -A BLOCKLIST_FWD -m set --match-set "$IPSET_VPN" src -j DROP
 fi
 
+# GeoIP Blacklist
+if ipset list -n GeoBlock >/dev/null 2>&1; then
+    iptables -A BLOCKLIST_IN -m set --match-set GeoBlock src -j NFLOG --nflog-group 1 --nflog-range 128 --nflog-prefix "FW_DROP"
+    iptables -A BLOCKLIST_IN -m set --match-set GeoBlock src -j DROP
+    iptables -A BLOCKLIST_FWD -m set --match-set GeoBlock src -j NFLOG --nflog-group 1 --nflog-range 128 --nflog-prefix "FW_DROP"
+    iptables -A BLOCKLIST_FWD -m set --match-set GeoBlock src -j DROP
+fi
+
 # --- DYNAMIC AUTOBAN BLOCK (Conditionally Active) ---
 if [ "$ENABLE_AUTOBAN" = "true" ] && ipset list -n "$IPSET_AUTOBAN" >/dev/null 2>&1; then
     iptables -A BLOCKLIST_IN -m set --match-set "$IPSET_AUTOBAN" src -j NFLOG --nflog-group 1 --nflog-range 128 --nflog-prefix "FW_DROP"
@@ -246,6 +267,9 @@ if [ -n "$TCP_PORTS_CSV" ]; then
     if [ "$ENABLE_CONNLIMIT" = "true" ]; then
         iptables -A SCAN_TRAP -p tcp -m multiport --dports "$TCP_PORTS_CSV" -j FW_CHK_CONN
         if [ -n "$BYPASS_CONN_TCP_CSV" ]; then 
+            if [ -n "$CONNLIMIT_CUSTOM" ] && [ "$CONNLIMIT_CUSTOM" -gt 0 ]; then
+                iptables -A FW_CHK_CONN -p tcp -m multiport --dports "$BYPASS_CONN_TCP_CSV" -m connlimit --connlimit-above "$CONNLIMIT_CUSTOM" -j DROP
+            fi
             iptables -A FW_CHK_CONN -p tcp -m multiport --dports "$BYPASS_CONN_TCP_CSV" -j RETURN
         fi
         iptables -A FW_CHK_CONN -p tcp -m connlimit --connlimit-above "$CONNLIMIT_MAX" -j DROP
@@ -280,6 +304,9 @@ if [ -n "$UDP_PORTS_CSV" ]; then
     if [ "$ENABLE_CONNLIMIT" = "true" ]; then
         iptables -A SCAN_TRAP -p udp -m multiport --dports "$UDP_PORTS_CSV" -j FW_CHK_CONN
         if [ -n "$BYPASS_CONN_UDP_CSV" ]; then 
+            if [ -n "$CONNLIMIT_CUSTOM" ] && [ "$CONNLIMIT_CUSTOM" -gt 0 ]; then
+                iptables -A FW_CHK_CONN -p udp -m multiport --dports "$BYPASS_CONN_UDP_CSV" -m connlimit --connlimit-above "$CONNLIMIT_CUSTOM" -j DROP
+            fi
             iptables -A FW_CHK_CONN -p udp -m multiport --dports "$BYPASS_CONN_UDP_CSV" -j RETURN
         fi
         iptables -A FW_CHK_CONN -p udp -m connlimit --connlimit-above "$CONNLIMIT_MAX" -j DROP
@@ -364,6 +391,14 @@ if [ "$ENABLE_IPV6" = "true" ]; then
         ip6tables -A BLOCKLIST_FWD6 -m set --match-set "$IPSET_MAIN6" src -j NFLOG --nflog-group 1 --nflog-range 128 --nflog-prefix "FW_DROP6"
         ip6tables -A BLOCKLIST_FWD6 -m set --match-set "$IPSET_MAIN6" src -j DROP
     fi
+	
+	# GeoIP Blacklist IPv6
+    if ipset list -n GeoBlock6 >/dev/null 2>&1; then
+        ip6tables -A BLOCKLIST_IN6 -m set --match-set GeoBlock6 src -j NFLOG --nflog-group 1 --nflog-range 128 --nflog-prefix "FW_DROP6"
+        ip6tables -A BLOCKLIST_IN6 -m set --match-set GeoBlock6 src -j DROP
+        ip6tables -A BLOCKLIST_FWD6 -m set --match-set GeoBlock6 src -j NFLOG --nflog-group 1 --nflog-range 128 --nflog-prefix "FW_DROP6"
+        ip6tables -A BLOCKLIST_FWD6 -m set --match-set GeoBlock6 src -j DROP
+    fi
 
     # AutoBan (Conditional)
     if [ "$ENABLE_AUTOBAN" = "true" ] && ipset list -n "$IPSET_AUTOBAN6" >/dev/null 2>&1; then
@@ -392,7 +427,12 @@ if [ "$ENABLE_IPV6" = "true" ]; then
         # MODULAR: ConnLimit
         if [ "$ENABLE_CONNLIMIT" = "true" ]; then
             ip6tables -A SCAN_TRAP6 -p tcp -m multiport --dports "$TCP_PORTS_CSV" -j FW_CHK_CONN6
-            if [ -n "$BYPASS_CONN_TCP_CSV" ]; then ip6tables -A FW_CHK_CONN6 -p tcp -m multiport --dports "$BYPASS_CONN_TCP_CSV" -j RETURN; fi
+            if [ -n "$BYPASS_CONN_TCP_CSV" ]; then 
+                if [ -n "$CONNLIMIT_CUSTOM" ] && [ "$CONNLIMIT_CUSTOM" -gt 0 ]; then
+                    ip6tables -A FW_CHK_CONN6 -p tcp -m multiport --dports "$BYPASS_CONN_TCP_CSV" -m connlimit --connlimit-above "$CONNLIMIT_CUSTOM" -j DROP
+                fi
+                ip6tables -A FW_CHK_CONN6 -p tcp -m multiport --dports "$BYPASS_CONN_TCP_CSV" -j RETURN
+            fi
             ip6tables -A FW_CHK_CONN6 -p tcp -m connlimit --connlimit-above "$CONNLIMIT_MAX" -j DROP
         fi
 
@@ -412,12 +452,20 @@ if [ "$ENABLE_IPV6" = "true" ]; then
     
     # IPv6 UDP Services
     if [ -n "$UDP_PORTS_CSV" ]; then
+        
+		# MODULAR: ConnLimit
         if [ "$ENABLE_CONNLIMIT" = "true" ]; then
             ip6tables -A SCAN_TRAP6 -p udp -m multiport --dports "$UDP_PORTS_CSV" -j FW_CHK_CONN6
-            if [ -n "$BYPASS_CONN_UDP_CSV" ]; then ip6tables -A FW_CHK_CONN6 -p udp -m multiport --dports "$BYPASS_CONN_UDP_CSV" -j RETURN; fi
+            if [ -n "$BYPASS_CONN_UDP_CSV" ]; then 
+                if [ -n "$CONNLIMIT_CUSTOM" ] && [ "$CONNLIMIT_CUSTOM" -gt 0 ]; then
+                    ip6tables -A FW_CHK_CONN6 -p udp -m multiport --dports "$BYPASS_CONN_UDP_CSV" -m connlimit --connlimit-above "$CONNLIMIT_CUSTOM" -j DROP
+                fi
+                ip6tables -A FW_CHK_CONN6 -p udp -m multiport --dports "$BYPASS_CONN_UDP_CSV" -j RETURN
+            fi
             ip6tables -A FW_CHK_CONN6 -p udp -m connlimit --connlimit-above "$CONNLIMIT_MAX" -j DROP
         fi
-
+		
+		# MODULAR: BruteForce
         if [ "$ENABLE_BRUTEFORCE" = "true" ]; then
             ip6tables -A SCAN_TRAP6 -p udp -m multiport --dports "$UDP_PORTS_CSV" -j FW_CHK_BRUTE6
             if [ -n "$BYPASS_BRUTE_UDP_CSV" ]; then ip6tables -A FW_CHK_BRUTE6 -p udp -m multiport --dports "$BYPASS_BRUTE_UDP_CSV" -j RETURN; fi
