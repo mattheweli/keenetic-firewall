@@ -1,25 +1,17 @@
 #!/bin/sh
 
 # ==============================================================================
-# ABUSEIPDB AUTO-REPORTER v2.1.2 (ULOGD/NFLOG EDITION)
+# ABUSEIPDB AUTO-REPORTER v2.2.0 (GEO-IP EDITION)
 # ==============================================================================
 # Description: 
 #   Auto-reports malicious IPs to AbuseIPDB.
 #
+#   CHANGES v2.2.0:
+#     - NEW: Added dedicated reporting for GeoIP blocklist hits.
+#     - FIX: Separated 'main' subnets from 'geo' subnets to prevent overlap.
+#
 #   CHANGES v2.1.2:
-#     - API LIMIT: Truncates port lists in comments to a maximum of 200 chars 
-#       to prevent AbuseIPDB API 422 errors (1024 char limit on comments).
-#
-#   CHANGES v2.1.1 (Performance & Bugfix Update):
-#     - PERFORMANCE: Optimized SQLite JOINs (replaced OR chains with REPLACE()) 
-#       to prevent EXT4 I/O lockups and 100% CPU spikes during table scans.
-#     - BUGFIX: Replaced Bash-specific IFS=$'\n' with POSIX/BusyBox compatible 
-#       newline parsing to fix silent string splitting errors.
-#
-#   CHANGES v2.1.0:
-#     - LOGIC: Uses ULOGD 'port_history' as primary evidence.
-#     - REPORTING: Separates Trap hits (Hacking) from Scanners.
-#     - EVIDENCE: Adds "Blocked via Kernel/NFLOG" signature.
+#     - API LIMIT: Truncates port lists in comments to a maximum of 200 chars.
 # ==============================================================================
 
 export PATH=/opt/bin:/opt/sbin:/usr/bin:/usr/sbin:/bin:/sbin
@@ -300,7 +292,8 @@ process_subnets() {
     echo "--- Processing Top 25 Subnets ---"
 
     QUERY="SELECT d.ip, SUM(d.count) as total FROM ip_drops d 
-           WHERE d.ip LIKE '%/%' 
+           WHERE d.list_type='main'
+           AND d.ip LIKE '%/%' 
            AND d.ip NOT LIKE '%/32' 
            AND d.ip NOT LIKE '%/128'
            AND d.timestamp > $LIMIT_TIME
@@ -318,6 +311,33 @@ process_subnets() {
         CLEAN_IP=$(echo "$SUBNET" | cut -d'/' -f1)
         echo " -> Candidate: $SUBNET (Hits: $CNT)"
         send_report "$CLEAN_IP" "14,4" "Keenetic Firewall Subnet Block: Entire subnet $SUBNET blocked ($CNT hits in 24h). Reporting network ID." "net"
+    done
+    IFS="$OIFS"
+}
+
+# ==============================================================================
+# 8. PRIORITY 5: GEO-IP BLOCKS
+# ==============================================================================
+process_geoip() {
+    echo "--- Processing GeoIP Blocklist Hits ---"
+
+    QUERY="SELECT d.ip, SUM(d.count) as total FROM ip_drops d 
+           WHERE d.list_type='geo' 
+           AND d.timestamp > $LIMIT_TIME
+           GROUP BY d.ip ORDER BY total DESC LIMIT 20;"
+
+    ROWS=$(sqlite3 -separator "|" "$DB_FILE" "$QUERY")
+
+    # BusyBox Compatible IFS for newlines
+    OIFS="$IFS"
+    IFS='
+'
+    for ROW in $ROWS; do
+        SUBNET=$(echo "$ROW" | cut -d'|' -f1)
+        CNT=$(echo "$ROW" | cut -d'|' -f2)
+        CLEAN_IP=$(echo "$SUBNET" | cut -d'/' -f1)
+        echo " -> Candidate: $SUBNET (Hits: $CNT)"
+        send_report "$CLEAN_IP" "14" "Keenetic Firewall GeoIP Block: Traffic dropped from banned region $SUBNET ($CNT hits in 24h)." "geo"
     done
     IFS="$OIFS"
 }
@@ -344,6 +364,7 @@ process_static "v4"
 process_static "v6"
 
 process_subnets
+process_geoip
 
 # Final Summary Log
 echo "---------------------------------------------------"
