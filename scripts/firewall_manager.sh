@@ -1,9 +1,11 @@
 #!/bin/sh
 
 # ==============================================================================
-# KEENETIC FIREWALL MANAGER v2.5.1 (GRANULAR BYPASS WIZARD)
+# KEENETIC FIREWALL MANAGER v2.6.0 (GEO-IP INTEGRATION)
 # Changelog:
-#   - FIX: port management for clearing entries
+#   - NEW: GeoIP Blocking configuration menu (Drop entire countries via IPdeny).
+#   - NEW: Granular DDoS/BruteForce Tuning (Global vs Bypass Limits).
+#   - FIX: port management for clearing entries.
 #   - FEAT: Introduced Granular Port Whitelisting (Sub-chain Architecture).
 #   - FEAT: Interactive Port Wizard to bypass AutoBan, ConnLimit or BruteForce independently.
 #   - UX: Settings are automatically applied on exiting the config menu (Option 0).
@@ -42,6 +44,8 @@ DEF_PASSIVE=""
 DEF_BF_SEC="60"
 DEF_BF_HIT="5"
 DEF_REP_COOL="604800" # 7 Days
+# GeoIP Defaults
+DEF_BANNED_COUNTRIES=""
 
 # Default Blocklist URLs
 L4_DEFAULTS="https://iplists.firehol.org/files/firehol_level1.netset https://blocklist.greensnow.co/greensnow.txt http://cinsscore.com/list/ci-badguys.txt https://lists.blocklist.de/lists/all.txt https://raw.githubusercontent.com/borestad/blocklist-abuseipdb/main/abuseipdb-s100-30d.ipv4"
@@ -59,7 +63,7 @@ BOLD='\033[1m'; DIM='\033[2m'
 show_header() {
     clear
     echo -e "${BLUE}=================================================${NC}"
-    echo -e "${BOLD}🛡️  KEENETIC FIREWALL MANAGER v2.5.1${NC}"
+    echo -e "${BOLD}🛡️  KEENETIC FIREWALL MANAGER v2.6.0${NC}"
     echo -e "${BLUE}=================================================${NC}"
 }
 
@@ -103,6 +107,7 @@ calculate_seconds() {
 }
 
 # --- CONFIG ENGINE ---
+# --- CONFIG ENGINE ---
 load_config() {
     if [ ! -f "$CONF_FILE" ]; then
         echo "Generating default configuration file..."
@@ -122,10 +127,15 @@ load_config() {
         echo "BYPASS_BRUTE_TCP=\"\"" >> "$CONF_FILE"
         echo "BYPASS_BRUTE_UDP=\"\"" >> "$CONF_FILE"
         
+        # [NEW] Custom Limit for Bypassed Ports
+        echo "CONNLIMIT_CUSTOM=\"150\"" >> "$CONF_FILE"
+        
         echo "TCP_PASSIVE_RANGE=\"$DEF_PASSIVE\"" >> "$CONF_FILE"
         echo "BF_SECONDS=\"$DEF_BF_SEC\"" >> "$CONF_FILE"
         echo "BF_HITCOUNT=\"$DEF_BF_HIT\"" >> "$CONF_FILE"
         echo "REPORT_COOLDOWN=\"$DEF_REP_COOL\"" >> "$CONF_FILE"
+		# GeoIP Configuration
+        echo "BANNED_COUNTRIES=\"$DEF_BANNED_COUNTRIES\"" >> "$CONF_FILE"
         echo "SOURCES_V4=\"$L4_DEFAULTS\"" >> "$CONF_FILE"
         echo "SOURCES_V6=\"$L6_DEFAULTS\"" >> "$CONF_FILE"
     fi
@@ -138,13 +148,12 @@ load_config() {
     : ${ENABLE_BRUTEFORCE:=$DEF_ENABLE_BF}
     : ${ENABLE_CONNLIMIT:=$DEF_ENABLE_CONN}
     : ${CONNLIMIT_MAX:=$DEF_CONN_MAX}
+    : ${CONNLIMIT_CUSTOM:="150"}
     : ${BAN_TIMEOUT:=$DEF_BAN_TIME}
     
-    # AutoBan Safe Ports
     : ${TCP_SERVICES:=$DEF_TCP}
     : ${UDP_SERVICES:=$DEF_UDP}
     
-    # Granular Bypass Fallbacks
     : ${BYPASS_CONN_TCP:=""}
     : ${BYPASS_CONN_UDP:=""}
     : ${BYPASS_BRUTE_TCP:=""}
@@ -154,6 +163,8 @@ load_config() {
     : ${BF_SECONDS:=$DEF_BF_SEC}
     : ${BF_HITCOUNT:=$DEF_BF_HIT}
     : ${REPORT_COOLDOWN:=$DEF_REP_COOL}
+	# GeoIP fallback
+    : ${BANNED_COUNTRIES:=$DEF_BANNED_COUNTRIES}
     : ${SOURCES_V4:=$L4_DEFAULTS}
     : ${SOURCES_V6:=$L6_DEFAULTS}
     
@@ -164,11 +175,11 @@ save_config() {
     echo "ENABLE_IPV6=\"$ENABLE_IPV6\"" > "$CONF_FILE"
     echo "ENABLE_FWD_PROTECTION=\"$ENABLE_FWD_PROTECTION\"" >> "$CONF_FILE"
     
-    # [FIX] Aggiunte le variabili dei moduli di sicurezza e del limite connessioni
     echo "ENABLE_AUTOBAN=\"$ENABLE_AUTOBAN\"" >> "$CONF_FILE"
     echo "ENABLE_BRUTEFORCE=\"$ENABLE_BRUTEFORCE\"" >> "$CONF_FILE"
     echo "ENABLE_CONNLIMIT=\"$ENABLE_CONNLIMIT\"" >> "$CONF_FILE"
     echo "CONNLIMIT_MAX=\"$CONNLIMIT_MAX\"" >> "$CONF_FILE"
+    echo "CONNLIMIT_CUSTOM=\"$CONNLIMIT_CUSTOM\"" >> "$CONF_FILE"
     
     echo "BAN_TIMEOUT=\"$BAN_TIMEOUT\"" >> "$CONF_FILE"
     echo "TCP_SERVICES=\"$TCP_SERVICES\"" >> "$CONF_FILE"
@@ -183,6 +194,8 @@ save_config() {
     echo "BF_SECONDS=\"$BF_SECONDS\"" >> "$CONF_FILE"
     echo "BF_HITCOUNT=\"$BF_HITCOUNT\"" >> "$CONF_FILE"
     echo "REPORT_COOLDOWN=\"$REPORT_COOLDOWN\"" >> "$CONF_FILE"
+	# Save GeoIP settings
+    echo "BANNED_COUNTRIES=\"$BANNED_COUNTRIES\"" >> "$CONF_FILE"
     echo "SOURCES_V4=\"$SOURCES_V4\"" >> "$CONF_FILE"
     echo "SOURCES_V6=\"$SOURCES_V6\"" >> "$CONF_FILE"
 }
@@ -598,6 +611,30 @@ do_reporter_setup() {
     done
 }
 
+# --- GEOIP SETUP MENU ---
+do_geoip_setup() {
+    show_header
+    echo -e "${YELLOW}--- GEO-IP BLOCKING ---${NC}"
+    echo -e "Block entire countries using IPdeny aggregated zones."
+    echo -e "Current Banned Countries: ${CYAN}${BANNED_COUNTRIES:-None}${NC}"
+    echo ""
+    echo "Enter 2-letter country codes separated by space (e.g., cn ru kp ir)."
+    echo "Leave empty to disable GeoIP blocking."
+    echo ""
+    echo -n "Countries: "
+    read -r NEW_COUNTRIES
+    
+    # Normalize input to lowercase for IPdeny URLs
+    NEW_COUNTRIES=$(echo "$NEW_COUNTRIES" | tr '[:upper:]' '[:lower:]')
+    
+    BANNED_COUNTRIES="$NEW_COUNTRIES"
+    save_config
+    
+    echo -e "\n${GREEN}GeoIP configuration saved!${NC}"
+    echo "Run 'Update Blocklists' from the main menu to download and apply the blocks."
+    pause
+}
+
 # --- FLUSH MENU (MANUAL CLEANUP) ---
 do_flush_menu() {
     while true; do
@@ -682,7 +719,10 @@ do_settings() {
         echo -e "${DIM} ---------------------------------------${NC}"
         echo -e " 3) AutoBan (Dynamic Blacklisting) ..... [$ST_BAN_TOG]"
         echo -e " 4) BruteForce Protection .............. [$ST_BF_TOG]"
-        echo -e " 5) DDoS ConnLimit (Max: $CONNLIMIT_MAX) ........... [$ST_CONN]"
+        
+        if [ "$CONNLIMIT_CUSTOM" -eq 0 ] 2>/dev/null; then ST_C_CUS="Unlimited"; else ST_C_CUS="${CONNLIMIT_CUSTOM:-150}"; fi
+        echo -e " 5) DDoS ConnLimit (Global: $CONNLIMIT_MAX | Bypass: $ST_C_CUS) ... [$ST_CONN]"
+        
         echo -e "${DIM} ---------------------------------------${NC}"
         echo -e " 6) Manage IPv4 Sources ................ [${WHITE}$CNT_V4 Active${NC}]"
         echo -e " 7) Manage IPv6 Sources ................ [${WHITE}$CNT_V6 Active${NC}]"
@@ -690,6 +730,8 @@ do_settings() {
         echo -e " 9) Auto-Ban Timeout ................... [$ST_TIMEOUT]"
         echo -e " 10) Brute-Force Sensitivity ........... [$ST_BF_SENS]"
         echo -e " 11) AbuseIPDB Settings ................ [${WHITE}Key & Cooldown${NC}]"
+		# Added GeoIP Menu Option
+        echo -e " 12) GeoIP Banned Countries ............ [${WHITE}${BANNED_COUNTRIES:-None}${NC}]"
         echo ""
         echo -e " 0) ${GREEN}Apply Changes & Return${NC} (Restarts Hook)"
         echo -e " x) ${RED}Return WITHOUT applying${NC} (Keep current rules)"
@@ -734,15 +776,30 @@ do_settings() {
                 save_config 
                 ;;
             5) 
-                # ConnLimit Logic with Config
                 if [ "$ENABLE_CONNLIMIT" = "true" ]; then 
-                    ENABLE_CONNLIMIT="false"
+                    echo -e "\n${YELLOW}--- ConnLimit Settings ---${NC}"
+                    echo " 1) Disable Protection"
+                    echo " 2) Change Connection Limits"
+                    echo -n "Select option: "
+                    read -r cl_opt
+                    if [ "$cl_opt" = "1" ]; then 
+                        ENABLE_CONNLIMIT="false"
+                    elif [ "$cl_opt" = "2" ]; then
+                        echo -n "Enter Global Max Connections per IP [Current: $CONNLIMIT_MAX]: "
+                        read -r new_max
+                        if echo "$new_max" | grep -qE '^[0-9]+$'; then CONNLIMIT_MAX="$new_max"; fi
+                        echo -n "Enter Custom Limit for Bypassed Ports (0 = Unlimited) [Current: ${CONNLIMIT_CUSTOM:-150}]: "
+                        read -r new_cus
+                        if echo "$new_cus" | grep -qE '^[0-9]+$'; then CONNLIMIT_CUSTOM="$new_cus"; fi
+                    fi
                 else 
                     ENABLE_CONNLIMIT="true"
-                    echo ""
-                    echo -n "Enter Max Connections per IP [Current: $CONNLIMIT_MAX]: "
+                    echo -n "Enter Global Max Connections per IP [Current: $CONNLIMIT_MAX]: "
                     read -r new_max
-                    if [ -n "$new_max" ]; then CONNLIMIT_MAX="$new_max"; fi
+                    if echo "$new_max" | grep -qE '^[0-9]+$'; then CONNLIMIT_MAX="$new_max"; fi
+                    echo -n "Enter Custom Limit for Bypassed Ports (0 = Unlimited) [Current: ${CONNLIMIT_CUSTOM:-150}]: "
+                    read -r new_cus
+                    if echo "$new_cus" | grep -qE '^[0-9]+$'; then CONNLIMIT_CUSTOM="$new_cus"; fi
                 fi
                 save_config 
                 ;;
@@ -752,6 +809,7 @@ do_settings() {
             9) do_timeout_setup ;;
             10) do_bf_setup ;;
             11) do_reporter_setup ;;
+			12) do_geoip_setup ;; # GeoIP handler
             0)
                 # Execute hook cleanly in background logic
                 echo -e "\n${YELLOW}Applying configuration and restarting Firewall Hook...${NC}"
@@ -850,6 +908,18 @@ do_health_check() {
     CNT_VPN=$(ipset list VPNBlock 2>/dev/null | grep -cE '^[0-9]')
     echo -e "   VPN Blocklist:      ${CYAN}$CNT_VPN IPs${NC}"
     
+	# GeoIP IPv4 Status
+    if [ -n "$BANNED_COUNTRIES" ]; then
+        if ipset list GeoBlock >/dev/null 2>&1; then 
+            CNT_GEO=$(ipset list GeoBlock 2>/dev/null | grep -cE '^[0-9]')
+            echo -e "   GeoIP Blocklist:    ${GREEN}ACTIVE${NC} (${CYAN}$CNT_GEO Subnets${NC})"
+        else 
+            echo -e "   GeoIP Blocklist:    ${RED}MISSING${NC}"
+        fi
+    else
+        echo -e "   GeoIP Blocklist:    ${DIM}Disabled${NC}"
+    fi
+	
     # --- IPv6 ---
     if [ "$ENABLE_IPV6" = "true" ]; then
         CNT_V6=$(ipset list FirewallBlock6 2>/dev/null | grep -cE '^[0-9a-fA-F:]')
@@ -865,6 +935,16 @@ do_health_check() {
             echo -e "   Auto-Ban6 (Trap):   ${GREEN}ACTIVE${NC} (${RED}$CNT_BAN6 IPs${NC})"
         else 
             echo -e "   Auto-Ban6 (Trap):   ${RED}MISSING${NC}"
+        fi
+		
+		# GeoIP IPv6 Status
+        if [ -n "$BANNED_COUNTRIES" ]; then
+            if ipset list GeoBlock6 >/dev/null 2>&1; then 
+                CNT_GEO6=$(ipset list GeoBlock6 2>/dev/null | grep -cE '^[0-9a-fA-F:]')
+                echo -e "   GeoIP6 Blocklist:   ${GREEN}ACTIVE${NC} (${CYAN}$CNT_GEO6 Subnets${NC})"
+            else 
+                echo -e "   GeoIP6 Blocklist:   ${RED}MISSING${NC}"
+            fi
         fi
     else
         echo -e "   IPv6 Support:       ${DIM}Disabled${NC}"
