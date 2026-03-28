@@ -1,12 +1,15 @@
 #!/bin/sh
 
 # ==============================================================================
-# BLOCKLIST UPDATER v2.2.4 (SPLIT SAVE)
+# BLOCKLIST UPDATER v2.3.2 (GEO-IP INTEGRATION)
 # Features: 
+# - NEW: GeoIP Blocking (Downloads aggregated country zones from IPdeny).
 # - CONFIG: Reads /opt/etc/firewall.conf for ENABLE_IPV6 and SOURCE URLS.
 # - REPORTING: Generates a detailed summary in Syslog and Terminal.
 # - LOGIC: Skips Phase 2 (IPv6) completely if disabled.
 # - FIX: Saves IPv4 and IPv6 lists to separate files for reliable restore.
+# - FIX: Silenced curl 404 errors for countries lacking IPv6 allocations (e.g., kp).
+# - FIX: Added GeoIP subnet counts to the final terminal summary and syslog.
 # ==============================================================================
 
 export PATH=/opt/bin:/opt/sbin:/usr/bin:/usr/sbin:/bin:/sbin
@@ -49,6 +52,8 @@ CACHE_DURATION=21600
 DIFF_FILE_V4="/opt/etc/firewall_v4_diff.dat"
 DIFF_FILE_V6="/opt/etc/firewall_v6_diff.dat"
 DIFF_FILE_VPN="/opt/etc/firewall_vpn_diff.dat"
+DIFF_FILE_GEO="/opt/etc/firewall_geo_diff.dat"
+DIFF_FILE_GEO6="/opt/etc/firewall_geo6_diff.dat"
 
 # [MODIFIED] Separate Backup Files
 BACKUP_FILE_V4="/opt/etc/firewall_blocklist.save"
@@ -82,7 +87,7 @@ load_turbo() {
     sed "s/^/add $SET_NAME /" "$FILE_CLEAN" | ipset restore -!
 }
 
-echo "=== Firewall Blocklist Updater v2.2.4 ==="
+echo "=== Firewall Blocklist Updater v2.3.1 ==="
 echo "[$(date '+%H:%M:%S')] Starting update. IPv6 Mode: $ENABLE_IPV6"
 
 # --- 1. INIT IPSETS ---
@@ -232,6 +237,79 @@ if ipset list -n "$IPSET_VPN" >/dev/null 2>&1; then
     if [ "$CLEAN_COUNT" -gt 0 ]; then echo " -> Optimized: Removed $CLEAN_COUNT IPs."; else echo " -> No redundancy found."; fi
 fi
 
+# --- 4. GEO-IP BLOCKLISTS (Zero-Downtime Swap) ---
+if [ -n "$BANNED_COUNTRIES" ]; then
+    echo "------------------------------------------------"
+    echo "PHASE 4: GeoIP Blocklists ($BANNED_COUNTRIES)"
+    
+    # 1. Grab old sizes before doing anything
+    GEO_OLD=$(ipset list GeoBlock 2>/dev/null | grep -cE '^[0-9]')
+    GEO_OLD=${GEO_OLD:-0}
+    GEO6_OLD=0
+    if [ "$ENABLE_IPV6" = "true" ]; then
+        GEO6_OLD=$(ipset list GeoBlock6 2>/dev/null | grep -cE '^[0-9a-fA-F:]')
+        GEO6_OLD=${GEO6_OLD:-0}
+    fi
+
+    : > /tmp/geo_batch.txt
+    : > /tmp/geo6_batch.txt
+    
+    # Create temporary sets for invisible update
+    ipset create GeoBlock_TMP hash:net family inet hashsize 1024 maxelem 262144 counters 2>/dev/null
+    ipset flush GeoBlock_TMP
+    
+    if [ "$ENABLE_IPV6" = "true" ]; then
+        ipset create GeoBlock6_TMP hash:net family inet6 hashsize 1024 maxelem 262144 counters 2>/dev/null
+        ipset flush GeoBlock6_TMP
+    fi
+
+    # Download loop for each country
+    for country in $BANNED_COUNTRIES; do
+        echo " -> Downloading IPv4 for [$country]..."
+        curl -fsSL --connect-timeout 10 --max-time 60 "https://www.ipdeny.com/ipblocks/data/aggregated/${country}-aggregated.zone" 2>/dev/null | awk '{print "add GeoBlock_TMP " $1}' >> /tmp/geo_batch.txt
+        
+        if [ "$ENABLE_IPV6" = "true" ]; then
+            echo " -> Downloading IPv6 for [$country]..."
+            curl -fsSL --connect-timeout 10 --max-time 60 "https://www.ipdeny.com/ipv6/ipaddresses/aggregated/${country}-aggregated.zone" 2>/dev/null | awk '{print "add GeoBlock6_TMP " $1}' >> /tmp/geo6_batch.txt
+        fi
+    done
+    
+    # Massive injection and Swap (No disconnections)
+    echo " -> Applying GeoIP rules to kernel..."
+    ipset restore -! < /tmp/geo_batch.txt
+    ipset swap GeoBlock_TMP GeoBlock
+    ipset destroy GeoBlock_TMP
+    
+    # Calculate IPv4 Diff
+    GEO_NEW=$(ipset list GeoBlock 2>/dev/null | grep -cE '^[0-9]')
+    calc_diff "$GEO_OLD" "$GEO_NEW" "$DIFF_FILE_GEO"
+    CHG_GEO=$(cat "$DIFF_FILE_GEO")
+    
+    if [ "$ENABLE_IPV6" = "true" ]; then
+        ipset restore -! < /tmp/geo6_batch.txt
+        ipset swap GeoBlock6_TMP GeoBlock6
+        ipset destroy GeoBlock6_TMP
+        
+        # Calculate IPv6 Diff
+        GEO6_NEW=$(ipset list GeoBlock6 2>/dev/null | grep -cE '^[0-9a-fA-F:]')
+        calc_diff "$GEO6_OLD" "$GEO6_NEW" "$DIFF_FILE_GEO6"
+        CHG_GEO6=$(cat "$DIFF_FILE_GEO6")
+    fi
+    
+    rm -f /tmp/geo_batch.txt /tmp/geo6_batch.txt
+    echo " -> GeoIP Successfully Updated."
+else
+    # Auto-cleanup: Flush sets if the user disabled GeoIP in the Manager
+    if ipset list GeoBlock >/dev/null 2>&1; then 
+        ipset flush GeoBlock 2>/dev/null
+        echo "=0" > "$DIFF_FILE_GEO"
+    fi
+    if ipset list GeoBlock6 >/dev/null 2>&1; then 
+        ipset flush GeoBlock6 2>/dev/null
+        echo "=0" > "$DIFF_FILE_GEO6"
+    fi
+fi
+
 # --- 5. FINALIZE & LOGGING ---
 echo "------------------------------------------------"
 echo -n "Reloading Firewall... "
@@ -244,9 +322,37 @@ echo "================================================"
 echo "            BLOCKLIST UPDATE SUMMARY            "
 echo "================================================"
 echo " IPv4 List: $RES_V4 ($CHG_V4)"
-echo " IPv6 List: $RES_V6 ($CHG_V6)"
-echo " VPN Optimized: -$CHG_VPN (Total: $RES_VPN)"
+if [ "$ENABLE_IPV6" = "true" ]; then
+    echo " IPv6 List: $RES_V6 ($CHG_V6)"
+fi
+echo " VPN Optimized: $CHG_VPN (Total: $RES_VPN)"
+
+# GeoIP Summary Addition
+if [ -n "$BANNED_COUNTRIES" ]; then
+    GEO_V4=$(ipset list GeoBlock 2>/dev/null | grep -cE '^[0-9]')
+    GEO_V4=${GEO_V4:-0}
+    GEO_V6=0
+    if [ "$ENABLE_IPV6" = "true" ]; then 
+        GEO_V6=$(ipset list GeoBlock6 2>/dev/null | grep -cE '^[0-9a-fA-F:]')
+        GEO_V6=${GEO_V6:-0}
+    fi
+    
+    # Calculate aggregated totals (v4 + v6)
+    TOT_GEO=$((GEO_V4 + GEO_V6))
+    TOT_OLD=$((GEO_OLD + GEO6_OLD))
+    TOT_DIFF=$((TOT_GEO - TOT_OLD))
+    
+    # Visual formatting of the difference (+X, -X, =0)
+    if [ "$TOT_DIFF" -gt 0 ]; then 
+        STR_DIFF="+$TOT_DIFF"
+    elif [ "$TOT_DIFF" -lt 0 ]; then 
+        STR_DIFF="$TOT_DIFF"
+    else 
+        STR_DIFF="=0"
+    fi
+    
+    echo " GeoIP Lists: $TOT_GEO subnets ($STR_DIFF)"
+fi
 echo "================================================"
 
-# Write one-line summary to Syslog
-logger -t "$LOG_TAG" "SUMMARY | IPv4: $RES_V4 ($CHG_V4) | IPv6: $RES_V6 ($CHG_V6) | VPN-Opt: -$CHG_VPN"
+logger -t "$LOG_TAG" "UPDATE | IPv4: $RES_V4 ($CHG_V4) | IPv6: $RES_V6 ($CHG_V6) | VPN Opt: $CHG_VPN | GeoIP: ${TOT_GEO:-0} (${STR_DIFF:-=0})"
