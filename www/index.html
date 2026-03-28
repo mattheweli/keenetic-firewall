@@ -1,4 +1,4 @@
-<!-- Firewall Dashboard v1.1.3 -->
+<!-- Firewall Dashboard v1.2.0 -->
 
 <!DOCTYPE html>
 <html lang="en">
@@ -34,6 +34,11 @@
             --purple: #6f42c1;
             --dark: #222;
             --link: #0097dc;
+			--map-base: #ffffff;
+            --map-stroke: #cccccc;
+            --map-min: #e0e0e0;
+            --map-max: #000000;
+            --map-hover: #00d4ff;
         }
         
         @media (prefers-color-scheme: dark) { 
@@ -57,6 +62,12 @@
                 --red: #ea4c4c;
                 --dark: #e0e0e0;
                 --link: #77bce4;
+				
+				--map-base: #243146;
+                --map-stroke: #4d545f;
+                --map-min: #3d5073;
+                --map-max: #ffffff;
+                --map-hover: #00bcd4;
             } 
         }
 
@@ -156,7 +167,7 @@
         .meta { font-size: 13px; color: var(--text-gray); line-height: 1.4; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .meta small { display: block; font-size: 12px; font-weight: 400; opacity: 0.8; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-height: 15px;}
         
-        .col-main { color: var(--red); } td.col-v6 { color: var(--purple); } .col-vpn { color: var(--orange); } .col-trap { color: var(--primary-text); font-weight: 700; }
+        .col-main { color: var(--red); } td.col-v6 { color: var(--purple); } .col-vpn { color: var(--orange); } .col-trap { color: var(--primary-text); font-weight: 500; }
         .nodata { text-align: center; color: var(--text-gray); padding: 20px; font-style: italic; font-size: 13px; }
         
         .avg-badge { font-size: 12px; font-weight: 500; color: var(--primary-text); background: var(--dashboard-background); padding: 2px 8px; border-radius: 4px; margin-left: 12px; border: 1px solid var(--stroke); }
@@ -171,6 +182,12 @@
         .lb-vpn { color: var(--orange); background: rgba(253,126,20,0.05); }
         .lb-trap { color: var(--primary-text); background: var(--dashboard-background); }
         .lb-exp { color: var(--text-gray); border-color: var(--stroke); }
+		.lb-geo { color: #00bcd4; background: rgba(0, 188, 212, 0.05); }
+		/* Force History Headers to be bold and primary color (black) */
+        #view_history th { color: var(--primary-text) !important; font-weight: 800 !important; font-size: 11.5px !important; }
+		#view_history td:last-child { font-weight: 700; }
+        .col-geo { color: #00bcd4; }
+		
 
         /* MODAL STYLES */
         .modal { display: none; position: fixed; z-index: 1000; left: 0; top: 0; width: 100%; height: 100%; overflow: auto; background-color: rgba(0,0,0,0.4); backdrop-filter: blur(2px); }
@@ -186,7 +203,12 @@
         .btn-action:hover { border-color: var(--primary-color); color: var(--primary-color); }
         
         .footer { text-align: center; font-size: 12px; color: var(--text-gray); margin-top: 40px; }
+		
+		.geo-tab-content { display: none; } .geo-tab-content.active { display: block; }
     </style>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/jsvectormap/dist/css/jsvectormap.min.css" />
+    <script src="https://cdn.jsdelivr.net/npm/jsvectormap"></script>
+    <script src="https://cdn.jsdelivr.net/npm/jsvectormap/dist/maps/world.js"></script>
 </head>
 <body>
     <div class="header">
@@ -245,10 +267,31 @@
             <h3>🪤 Auto-Ban Trap</h3>
             <div>
                 <span class="val" style="color:var(--dark)" id="size_trap_total">-</span>
-                <span style="font-size:12px; color:var(--text-gray); display:block; margin-top:2px;">
-                    v4: <b style="color:var(--primary-text)" id="size_trap"></b> <span id="diff_trap"></span> | 
-                    v6: <b style="color:var(--primary-text)" id="size_trap6"></b> <span id="diff_trap6"></span>
-                </span>
+                <div style="display: grid; grid-template-columns: 18px max-content auto; gap: 4px 10px; font-size:12px; color:var(--text-gray); margin-top:8px; align-items: center;">
+                    <span>v4:</span>
+                    <b style="color:var(--primary-text); text-align:right;" id="size_trap">-</b>
+                    <span id="diff_trap"></span>
+                    
+                    <span>v6:</span>
+                    <b style="color:var(--primary-text); text-align:right;" id="size_trap6">-</b>
+                    <span id="diff_trap6"></span>
+                </div>
+            </div>
+        </div>
+
+        <div class="card">
+            <h3>🌍 Geo-IP Blocklist</h3>
+            <div>
+                <span class="val" style="color:#00bcd4" id="size_geo_total">-</span>
+                <div style="display: grid; grid-template-columns: 18px max-content auto; gap: 4px 10px; font-size:12px; color:var(--text-gray); margin-top:8px; align-items: center;">
+                    <span>v4:</span>
+                    <b style="color:var(--primary-text); text-align:right;" id="size_geo">-</b>
+                    <span id="diff_geo"></span>
+                    
+                    <span>v6:</span>
+                    <b style="color:var(--primary-text); text-align:right;" id="size_geo6">-</b>
+                    <span id="diff_geo6"></span>
+                </div>
             </div>
         </div>
         <div class="card">
@@ -259,6 +302,7 @@
 
     <div class="main-tabs">
         <button class="main-tab-btn active" onclick="showMainTab('sources')">Threat Analysis</button>
+        <button class="main-tab-btn" onclick="showMainTab('geoip')">Global Threat Map</button>
         <button class="main-tab-btn" onclick="showMainTab('history')">Traffic History</button>
     </div>
 
@@ -324,34 +368,95 @@
                 <div><div class="sub-header">IPv6 Top Hitters</div><div class="table-container"><table><thead><tr><th style="width:60px">Cnt</th><th>Source</th><th>Info</th></tr></thead><tbody id="tb_ipv6_all"></tbody></table></div></div>
             </div>
         </div>
-    </div>
+    </div> 
+	<div id="view_geoip" class="view-section">
+        <div class="section-header-wrapper">
+            <div class="section-title">Global Threat Map</div>
+            <div class="tabs">
+                <button class="tab-btn active" onclick="showGeoTab('24h')">24h</button>
+                <button class="tab-btn" onclick="showGeoTab('30d')">30 Days</button>
+                <button class="tab-btn" onclick="showGeoTab('1y')">Yearly</button>
+                <button class="tab-btn" onclick="showGeoTab('all')">All Time</button>
+            </div>
+        </div>
+        
+        <div id="tab_g_24h" class="geo-tab-content active">
+            <div style="display: grid; grid-template-columns: 1fr 2fr; gap: 24px; align-items: stretch;">
+                <div style="display: flex; flex-direction: column;">
+                    <div class="sub-header">GeoIP Subnets</div>
+                    <div class="table-container" style="flex: 1;"><table><thead><tr><th style="width:60px">Cnt</th><th>Subnet</th><th>Info</th></tr></thead><tbody id="tb_geo_24h"></tbody></table></div>
+                </div>
+                <div id="globe_slot_24h" style="display: flex; flex-direction: column;"></div>
+            </div>
+        </div>
+        
+        <div id="tab_g_30d" class="geo-tab-content">
+            <div style="display: grid; grid-template-columns: 1fr 2fr; gap: 24px; align-items: stretch;">
+                <div style="display: flex; flex-direction: column;">
+                    <div class="sub-header">GeoIP Subnets</div>
+                    <div class="table-container" style="flex: 1;"><table><thead><tr><th style="width:60px">Cnt</th><th>Subnet</th><th>Info</th></tr></thead><tbody id="tb_geo_30d"></tbody></table></div>
+                </div>
+                <div id="globe_slot_30d" style="display: flex; flex-direction: column;"></div>
+            </div>
+        </div>
 
+        <div id="tab_g_1y" class="geo-tab-content">
+            <div style="display: grid; grid-template-columns: 1fr 2fr; gap: 24px; align-items: stretch;">
+                <div style="display: flex; flex-direction: column;">
+                    <div class="sub-header">GeoIP Subnets</div>
+                    <div class="table-container" style="flex: 1;"><table><thead><tr><th style="width:60px">Cnt</th><th>Subnet</th><th>Info</th></tr></thead><tbody id="tb_geo_1y"></tbody></table></div>
+                </div>
+                <div id="globe_slot_1y" style="display: flex; flex-direction: column;"></div>
+            </div>
+        </div>
+
+        <div id="tab_g_all" class="geo-tab-content">
+            <div style="display: grid; grid-template-columns: 1fr 2fr; gap: 24px; align-items: stretch;">
+                <div style="display: flex; flex-direction: column;">
+                    <div class="sub-header">GeoIP Subnets</div>
+                    <div class="table-container" style="flex: 1;"><table><thead><tr><th style="width:60px">Cnt</th><th>Subnet</th><th>Info</th></tr></thead><tbody id="tb_geo_all"></tbody></table></div>
+                </div>
+                <div id="globe_slot_all" style="display: flex; flex-direction: column;"></div>
+            </div>
+        </div>
+    </div>
+    
     <div id="view_history" class="view-section">
         <div class="tables-grid">
             <div>
                 <div class="section-header-wrapper"><div class="section-title">Hourly (Last 24h)<span class="avg-badge" id="avg_hourly"></span></div></div>
-                <div class="table-container"><table><thead><tr><th>Hour</th><th class="num">IPv4</th><th class="num col-v6">IPv6</th><th class="num">VPN</th><th class="num">Trap</th><th class="num">Tot</th></tr></thead><tbody id="tb_hourly"></tbody></table></div>
+                <div class="table-container"><table><thead><tr><th>Hour</th><th class="num">IPv4</th><th class="num col-v6">IPv6</th><th class="num">VPN</th><th class="num">Trap</th><th class="num col-geo">GeoIP</th><th class="num">Tot</th></tr></thead><tbody id="tb_hourly"></tbody></table></div>
             </div>
             <div>
                 <div class="section-header-wrapper"><div class="section-title">Daily (Last 30 Days)<span class="avg-badge" id="avg_daily"></span></div></div>
-                <div class="table-container"><table><thead><tr><th>Date</th><th class="num">IPv4</th><th class="num col-v6">IPv6</th><th class="num">VPN</th><th class="num">Trap</th><th class="num">Tot</th></tr></thead><tbody id="tb_daily"></tbody></table></div>
+                <div class="table-container"><table><thead><tr><th>Date</th><th class="num">IPv4</th><th class="num col-v6">IPv6</th><th class="num">VPN</th><th class="num">Trap</th><th class="num col-geo">GeoIP</th><th class="num">Tot</th></tr></thead><tbody id="tb_daily"></tbody></table></div>
             </div>
         </div>
         <div class="tables-grid">
             <div>
                 <div class="section-header-wrapper"><div class="section-title">Monthly (Last 12 Months)<span class="avg-badge" id="avg_monthly"></span></div></div>
-                <div class="table-container"><table><thead><tr><th>Month</th><th class="num">IPv4</th><th class="num col-v6">IPv6</th><th class="num">VPN</th><th class="num">Trap</th><th class="num">Tot</th></tr></thead><tbody id="tb_monthly"></tbody></table></div>
+                <div class="table-container"><table><thead><tr><th>Month</th><th class="num">IPv4</th><th class="num col-v6">IPv6</th><th class="num">VPN</th><th class="num">Trap</th><th class="num col-geo">GeoIP</th><th class="num">Tot</th></tr></thead><tbody id="tb_monthly"></tbody></table></div>
             </div>
             <div>
                 <div class="section-header-wrapper"><div class="section-title">Yearly History<span class="avg-badge" id="avg_yearly"></span></div></div>
-                <div class="table-container"><table><thead><tr><th>Year</th><th class="num">IPv4</th><th class="num col-v6">IPv6</th><th class="num">VPN</th><th class="num">Trap</th><th class="num">Tot</th></tr></thead><tbody id="tb_yearly"></tbody></table></div>
+                <div class="table-container"><table><thead><tr><th>Year</th><th class="num">IPv4</th><th class="num col-v6">IPv6</th><th class="num">VPN</th><th class="num">Trap</th><th class="num col-geo">GeoIP</th><th class="num">Tot</th></tr></thead><tbody id="tb_yearly"></tbody></table></div>
             </div>
         </div>
         <div class="tables-grid">
             <div style="grid-column: 1 / -1;">
                 <div class="section-header-wrapper"><div class="section-title">Top 10 Days by Volume (All Time)</div></div>
-                <div class="table-container"><table><thead><tr><th>Date</th><th class="num">IPv4</th><th class="num col-v6">IPv6</th><th class="num">VPN</th><th class="num">Trap</th><th class="num">Total</th></tr></thead><tbody id="tb_top_days"></tbody></table></div>
+                <div class="table-container"><table><thead><tr><th>Date</th><th class="num">IPv4</th><th class="num col-v6">IPv6</th><th class="num">VPN</th><th class="num">Trap</th><th class="num col-geo">GeoIP</th><th class="num">Total</th></tr></thead><tbody id="tb_top_days"></tbody></table></div>
             </div>
+        </div>
+    </div>
+
+	<div id="map_master" style="display: none; height: 100%; flex-direction: column;">
+        <div class="sub-header" style="display: flex; justify-content: space-between; align-items: center;">
+            <span>GLOBAL THREAT MAP</span>
+            <span id="map_stats" style="text-transform: none; color: var(--text-gray); font-weight: 400; font-size: 11px;"></span>
+        </div>
+        <div class="table-container" style="flex: 1; padding: 16px; min-height: 450px; box-sizing: border-box;">
+            <div id="map_canvas" style="width: 100%; height: 100%;"></div>
         </div>
     </div>
 
@@ -369,22 +474,139 @@
         </div>
     </div>
 
-    <div class="footer">Uptime: <span id="uptime">-</span></div>
+    <div class="footer">&copy; <span id="year"></span> mattheweli &nbsp;&bull;&nbsp; Uptime: <span id="uptime">-</span></div>
     
     <script>
         function showMainTab(id) {
             document.querySelectorAll('.view-section').forEach(e => e.classList.remove('active'));
             document.querySelectorAll('.main-tab-btn').forEach(e => e.classList.remove('active'));
             document.getElementById('view_'+id).classList.add('active'); event.target.classList.add('active');
+            
+            // Fix: Force redraw map if entering GeoIP tab so it scales perfectly
+            if(id === 'geoip') {
+                const activeGeoId = document.querySelector('.geo-tab-content.active').id.split('_').pop();
+                updateMap(activeGeoId);
+            }
         }
         function showTab(id) { 
             document.querySelectorAll('.tab-content').forEach(e => e.classList.remove('active')); 
-            document.querySelectorAll('.tab-btn').forEach(e => e.classList.remove('active')); 
-            document.getElementById('tab_'+id).classList.add('active'); event.target.classList.add('active'); 
+            document.querySelectorAll('#view_sources .tab-btn').forEach(e => e.classList.remove('active')); 
+            document.getElementById('tab_'+id).classList.add('active'); event.target.classList.add('active');
+        }
+        function showGeoTab(id) {
+            document.querySelectorAll('.geo-tab-content').forEach(e => e.classList.remove('active')); 
+            document.querySelectorAll('#view_geoip .tab-btn').forEach(e => e.classList.remove('active')); 
+            document.getElementById('tab_g_'+id).classList.add('active'); event.target.classList.add('active');
+            updateMap(id);
         }
 
         /* MODAL LOGIC */
         let currentModalPort = "";
+        
+        // --- 2D THREAT MAP LOGIC ---
+        let currentMapData = {};
+
+        function updateMap(period) {
+            const master = document.getElementById('map_master');
+            const slot = document.getElementById('globe_slot_' + period); 
+            if(slot) {
+                master.style.display = 'flex';
+                slot.appendChild(master);
+            }
+
+            const tablesToScan = ['tb_trap_', 'tb_other_', 'tb_nets_', 'tb_geo_'];
+            let countryCounts = {};
+            
+            tablesToScan.forEach(prefix => {
+                const tbody = document.getElementById(prefix + period);
+                if(!tbody) return;
+                
+                const rows = tbody.querySelectorAll('tr');
+                rows.forEach(row => {
+                    const hitsMatch = row.innerText.match(/^([0-9,]+)/);
+                    const hits = hitsMatch ? parseInt(hitsMatch[1].replace(/,/g, '')) : 0;
+                    
+                    const meta = row.querySelector('.meta');
+                    if(meta) {
+                        const ccMatch = meta.innerText.match(/- ([A-Z]{2})/);
+                        if(ccMatch && ccMatch[1]) {
+                            const cc = ccMatch[1];
+                            countryCounts[cc] = (countryCounts[cc] || 0) + hits;
+                        }
+                    }
+                });
+            });
+
+            currentMapData = countryCounts; 
+
+            // 3. Theme-Aware Gradient via CSS color-mix()
+            const hitValues = Object.values(countryCounts).filter(v => v > 0);
+            let maxHits = 1, minHits = 1;
+            if (hitValues.length > 0) {
+                maxHits = Math.max(...hitValues);
+                minHits = Math.min(...hitValues);
+            }
+
+            let cssRules = '';
+            for (let cc in countryCounts) {
+                let hits = countryCounts[cc];
+                if (hits > 0) {
+                    let intensity = 1;
+                    if (maxHits > minHits) {
+                        const logHits = Math.log(hits);
+                        const logMin = Math.log(minHits);
+                        const logMax = Math.log(maxHits);
+                        intensity = (logHits - logMin) / (logMax - logMin);
+                    }
+                    
+                    // We generate a percentage and let CSS variables handle the actual colors!
+                    const percentage = (intensity * 100).toFixed(2);
+                    
+                    cssRules += `#map_canvas path[data-code="${cc}"] { fill: color-mix(in srgb, var(--map-max) ${percentage}%, var(--map-min)) !important; }\n`;
+                    cssRules += `#map_canvas path[data-code="${cc}"]:hover { fill: var(--map-hover) !important; }\n`;
+                }
+            }
+
+            let styleTag = document.getElementById('dynamic_map_styles');
+            if (!styleTag) {
+                styleTag = document.createElement('style');
+                styleTag.id = 'dynamic_map_styles';
+                document.head.appendChild(styleTag);
+            }
+            styleTag.innerHTML = cssRules;
+
+            // 4. Recreate the SVG map using generic CSS Variables
+            const canvas = document.getElementById('map_canvas');
+            canvas.innerHTML = ''; 
+            
+            new jsVectorMap({
+                selector: '#map_canvas',
+                map: 'world',
+                zoomButtons: false, 
+                zoomOnScroll: false, 
+                backgroundColor: 'transparent',
+                regionStyle: {
+                    initial: { 
+                        fill: 'var(--map-base)', 
+                        stroke: 'var(--map-stroke)', 
+                        strokeWidth: 0.5 
+                    },
+                    hover: { 
+                        fill: 'var(--map-hover)', 
+                        fillOpacity: 1
+                    }
+                },
+                onRegionTooltipShow(event, tooltip, code) {
+                    if (currentMapData[code] && currentMapData[code] > 0) {
+                        tooltip.text(tooltip.text() + ': ' + currentMapData[code].toLocaleString() + ' hits');
+                    } else {
+                        tooltip.text(tooltip.text() + ': 0 hits');
+                    }
+                }
+            });
+            
+            document.getElementById('map_stats').innerText = `${Object.keys(currentMapData).length} Nations Mapped`;
+        }
 
         window.loadList = function(filename, port) {
             currentModalPort = port;
@@ -477,6 +699,15 @@
                 document.getElementById('size_trap6').innerText = t6;
                 setDiff('diff_trap', d.lists.diff_trap);
                 setDiff('diff_trap6', d.lists.diff_trap6);
+				
+				// --- GEOIP CALCS ---
+                const g4 = parseInt(d.lists.geo) || 0;
+                const g6 = parseInt(d.lists.geo6) || 0;
+                document.getElementById('size_geo_total').innerText = (g4 + g6);
+                document.getElementById('size_geo').innerText = g4;
+                document.getElementById('size_geo6').innerText = g6;
+                setDiff('diff_geo', d.lists.diff_geo);
+                setDiff('diff_geo6', d.lists.diff_geo6);
                 
                 document.getElementById('lifetime').innerText = d.lifetime; document.getElementById('uptime').innerText = d.uptime; document.getElementById('last_update_header').innerText = d.updated;
                 
@@ -493,10 +724,12 @@
                     document.getElementById('tb_trap_'+p).innerHTML = d.tables['trap_'+p];
                     document.getElementById('tb_other_'+p).innerHTML = d.tables['other_'+p];
                     document.getElementById('tb_nets_'+p).innerHTML = d.tables['nets_'+p];
+					document.getElementById('tb_geo_'+p).innerHTML = d.tables['geo_'+p];
                     document.getElementById('tb_ipv6_'+p).innerHTML = d.tables['ipv6_'+p];
                     if(d.tables['ports_'+p]) document.getElementById('tb_ports_'+p).innerHTML = d.tables['ports_'+p];
                     if(d.tables['brute_'+p]) document.getElementById('tb_brute_'+p).innerHTML = d.tables['brute_'+p];
                 });
+				updateMap('24h');
                 
                 if (d.ipv6_status === "false") {
                     if(document.getElementById('card_v6')) document.getElementById('card_v6').style.display = 'none';
@@ -512,6 +745,9 @@
         }
 
         window.onload = function() {
+            // Imposta l'anno corrente in automatico nel footer
+            document.getElementById('year').textContent = new Date().getFullYear();
+            
             fetchStats();
             const savedRate = localStorage.getItem('fw_stats_refresh_rate') || "0";
             document.getElementById('refresh_timer').value = savedRate;
