@@ -1,8 +1,10 @@
 #!/bin/sh
 
 # ==============================================================================
-# KEENETIC FIREWALL MANAGER v2.6.0 (GEO-IP INTEGRATION)
+# KEENETIC FIREWALL MANAGER v2.6.1 (INTERFACE WIZARD)
 # Changelog:
+#   - NEW: Automatic Interface Wizard to select VPN tunnels for updates.
+#   - NEW: Version 2.6.1 includes real-time IP and Traffic detection for selection.
 #   - NEW: GeoIP Blocking configuration menu (Drop entire countries via IPdeny).
 #   - NEW: Granular DDoS/BruteForce Tuning (Global vs Bypass Limits).
 #   - FIX: port management for clearing entries.
@@ -63,7 +65,7 @@ BOLD='\033[1m'; DIM='\033[2m'
 show_header() {
     clear
     echo -e "${BLUE}=================================================${NC}"
-    echo -e "${BOLD}🛡️  KEENETIC FIREWALL MANAGER v2.6.0${NC}"
+    echo -e "${BOLD}🛡️  KEENETIC FIREWALL MANAGER v2.6.1${NC}"
     echo -e "${BLUE}=================================================${NC}"
 }
 
@@ -107,7 +109,6 @@ calculate_seconds() {
 }
 
 # --- CONFIG ENGINE ---
-# --- CONFIG ENGINE ---
 load_config() {
     if [ ! -f "$CONF_FILE" ]; then
         echo "Generating default configuration file..."
@@ -127,13 +128,15 @@ load_config() {
         echo "BYPASS_BRUTE_TCP=\"\"" >> "$CONF_FILE"
         echo "BYPASS_BRUTE_UDP=\"\"" >> "$CONF_FILE"
         
-        # [NEW] Custom Limit for Bypassed Ports
+        # Custom Limit for Bypassed Ports
         echo "CONNLIMIT_CUSTOM=\"150\"" >> "$CONF_FILE"
         
         echo "TCP_PASSIVE_RANGE=\"$DEF_PASSIVE\"" >> "$CONF_FILE"
         echo "BF_SECONDS=\"$DEF_BF_SEC\"" >> "$CONF_FILE"
         echo "BF_HITCOUNT=\"$DEF_BF_HIT\"" >> "$CONF_FILE"
         echo "REPORT_COOLDOWN=\"$DEF_REP_COOL\"" >> "$CONF_FILE"
+        echo "UPDATE_INTERFACE=\"\"" >> "$CONF_FILE"
+        
 		# GeoIP Configuration
         echo "BANNED_COUNTRIES=\"$DEF_BANNED_COUNTRIES\"" >> "$CONF_FILE"
         echo "SOURCES_V4=\"$L4_DEFAULTS\"" >> "$CONF_FILE"
@@ -163,6 +166,8 @@ load_config() {
     : ${BF_SECONDS:=$DEF_BF_SEC}
     : ${BF_HITCOUNT:=$DEF_BF_HIT}
     : ${REPORT_COOLDOWN:=$DEF_REP_COOL}
+    : ${UPDATE_INTERFACE:=""}
+    
 	# GeoIP fallback
     : ${BANNED_COUNTRIES:=$DEF_BANNED_COUNTRIES}
     : ${SOURCES_V4:=$L4_DEFAULTS}
@@ -194,6 +199,8 @@ save_config() {
     echo "BF_SECONDS=\"$BF_SECONDS\"" >> "$CONF_FILE"
     echo "BF_HITCOUNT=\"$BF_HITCOUNT\"" >> "$CONF_FILE"
     echo "REPORT_COOLDOWN=\"$REPORT_COOLDOWN\"" >> "$CONF_FILE"
+    echo "UPDATE_INTERFACE=\"$UPDATE_INTERFACE\"" >> "$CONF_FILE"
+    
 	# Save GeoIP settings
     echo "BANNED_COUNTRIES=\"$BANNED_COUNTRIES\"" >> "$CONF_FILE"
     echo "SOURCES_V4=\"$SOURCES_V4\"" >> "$CONF_FILE"
@@ -712,6 +719,7 @@ do_settings() {
         CNT_V6=$(echo "$SOURCES_V6" | awk '{print NF}')
         if [ "$BAN_TIMEOUT" -eq 0 ]; then ST_TIMEOUT="${RED}Unlimited${NC}"; else ST_TIMEOUT="${GREEN}${BAN_TIMEOUT}s${NC}"; fi
         ST_BF_SENS="${WHITE}${BF_HITCOUNT}hits/${BF_SECONDS}s${NC}"
+        UI_UPD_IF="${CYAN}${UPDATE_INTERFACE:-WAN (Standard)}${NC}"
 
         # --- MENU LAYOUT ---
         echo -e " 1) IPv6 Support ....................... [$ST_V6]"
@@ -730,8 +738,8 @@ do_settings() {
         echo -e " 9) Auto-Ban Timeout ................... [$ST_TIMEOUT]"
         echo -e " 10) Brute-Force Sensitivity ........... [$ST_BF_SENS]"
         echo -e " 11) AbuseIPDB Settings ................ [${WHITE}Key & Cooldown${NC}]"
-		# Added GeoIP Menu Option
         echo -e " 12) GeoIP Banned Countries ............ [${WHITE}${BANNED_COUNTRIES:-None}${NC}]"
+        echo -e " 13) Download via Interface (VPN) ...... [$UI_UPD_IF]"
         echo ""
         echo -e " 0) ${GREEN}Apply Changes & Return${NC} (Restarts Hook)"
         echo -e " x) ${RED}Return WITHOUT applying${NC} (Keep current rules)"
@@ -809,7 +817,44 @@ do_settings() {
             9) do_timeout_setup ;;
             10) do_bf_setup ;;
             11) do_reporter_setup ;;
-			12) do_geoip_setup ;; # GeoIP handler
+            12) do_geoip_setup ;;
+            13) 
+                clear
+                echo -e "${CYAN}--- INTERFACE SELECTION WIZARD ---${NC}"
+                echo -e "Detecting active interfaces with traffic...\n"
+                
+                # Get list of interfaces (exclude loopback and bridge)
+                IFS_RAW=$(ifconfig | grep -E '^[a-zA-Z0-9]' | awk '{print $1}' | sed 's/://g')
+                
+                i=1
+                echo " 0) [AUTO/WAN] Use default routing"
+                for net_if in $IFS_RAW; do
+                    [ "$net_if" = "lo" ] && continue
+                    [ "$net_if" = "br0" ] && continue
+                    
+                    IP_ADDR=$(ifconfig "$net_if" 2>/dev/null | grep "inet addr" | awk -F: '{print $2}' | awk '{print $1}')
+                    if [ -n "$IP_ADDR" ]; then
+                        TRAFFIC=$(ifconfig "$net_if" | grep "TX bytes" | sed 's/.*TX bytes://; s/ (.*//')
+                        [ -z "$TRAFFIC" ] && TRAFFIC="0"
+                        echo " $i) $net_if (IP: $IP_ADDR) [TX: $TRAFFIC bytes]"
+                        eval "IF_MAP_$i=$net_if"
+                        i=$((i+1))
+                    fi
+                done
+                
+                echo ""
+                echo -n "Select interface (0-$((i-1))): "; read -r choice
+                if [ "$choice" = "0" ]; then
+                    UPDATE_INTERFACE=""
+                    echo "Reset to Default (WAN)."
+                elif [ "$choice" -ge 1 ] && [ "$choice" -lt "$i" ]; then
+                    eval "UPDATE_INTERFACE=\$IF_MAP_$choice"
+                    echo "Selected: $UPDATE_INTERFACE"
+                else
+                    echo "Invalid choice."
+                fi
+                save_config; pause
+                ;;
             0)
                 # Execute hook cleanly in background logic
                 echo -e "\n${YELLOW}Applying configuration and restarting Firewall Hook...${NC}"
@@ -908,7 +953,7 @@ do_health_check() {
     CNT_VPN=$(ipset list VPNBlock 2>/dev/null | grep -cE '^[0-9]')
     echo -e "   VPN Blocklist:      ${CYAN}$CNT_VPN IPs${NC}"
     
-	# GeoIP IPv4 Status
+    # GeoIP IPv4 Status
     if [ -n "$BANNED_COUNTRIES" ]; then
         if ipset list GeoBlock >/dev/null 2>&1; then 
             CNT_GEO=$(ipset list GeoBlock 2>/dev/null | grep -cE '^[0-9]')
@@ -919,7 +964,7 @@ do_health_check() {
     else
         echo -e "   GeoIP Blocklist:    ${DIM}Disabled${NC}"
     fi
-	
+    
     # --- IPv6 ---
     if [ "$ENABLE_IPV6" = "true" ]; then
         CNT_V6=$(ipset list FirewallBlock6 2>/dev/null | grep -cE '^[0-9a-fA-F:]')
@@ -936,8 +981,8 @@ do_health_check() {
         else 
             echo -e "   Auto-Ban6 (Trap):   ${RED}MISSING${NC}"
         fi
-		
-		# GeoIP IPv6 Status
+        
+        # GeoIP IPv6 Status
         if [ -n "$BANNED_COUNTRIES" ]; then
             if ipset list GeoBlock6 >/dev/null 2>&1; then 
                 CNT_GEO6=$(ipset list GeoBlock6 2>/dev/null | grep -cE '^[0-9a-fA-F:]')
