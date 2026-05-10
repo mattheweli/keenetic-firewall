@@ -1,15 +1,17 @@
 #!/bin/sh
 
 # ==============================================================================
-# BLOCKLIST UPDATER v2.3.2 (GEO-IP INTEGRATION)
+# BLOCKLIST UPDATER v2.4.0 (VPN TUNNEL & GEO-IP INTEGRATION)
 # Features: 
+# - NEW: Download via specific VPN Interface (--interface) to bypass ISP blocks.
+# - NEW: Unified GeoIP aggregate total and difference logic (+X, -X, =0).
 # - NEW: GeoIP Blocking (Downloads aggregated country zones from IPdeny).
 # - CONFIG: Reads /opt/etc/firewall.conf for ENABLE_IPV6 and SOURCE URLS.
 # - REPORTING: Generates a detailed summary in Syslog and Terminal.
 # - LOGIC: Skips Phase 2 (IPv6) completely if disabled.
 # - FIX: Saves IPv4 and IPv6 lists to separate files for reliable restore.
-# - FIX: Silenced curl 404 errors for countries lacking IPv6 allocations (e.g., kp).
-# - FIX: Added GeoIP subnet counts to the final terminal summary and syslog.
+# - FIX: Silenced curl 404 errors for countries lacking IPv6 allocations.
+# - FIX: 60-second timeouts for curl to handle slow IPdeny connections.
 # ==============================================================================
 
 export PATH=/opt/bin:/opt/sbin:/usr/bin:/usr/sbin:/bin:/sbin
@@ -21,9 +23,15 @@ if [ -f "$CONF_FILE" ]; then
 else
     # Fallbacks if config missing
     ENABLE_IPV6="true"
+    UPDATE_INTERFACE=""
     SOURCES_V4="https://iplists.firehol.org/files/firehol_level1.netset https://blocklist.greensnow.co/greensnow.txt"
     SOURCES_V6="https://www.spamhaus.org/drop/dropv6.txt"
 fi
+
+# Fallback defaults
+: ${UPDATE_INTERFACE:=""}
+: ${ENABLE_IPV6:="true"}
+: ${BANNED_COUNTRIES:=""}
 
 # --- INTERNAL VARS ---
 IPSET_NAME="FirewallBlock"
@@ -87,13 +95,22 @@ load_turbo() {
     sed "s/^/add $SET_NAME /" "$FILE_CLEAN" | ipset restore -!
 }
 
-echo "=== Firewall Blocklist Updater v2.3.1 ==="
+echo "=== Firewall Blocklist Updater v2.4.0 ==="
 echo "[$(date '+%H:%M:%S')] Starting update. IPv6 Mode: $ENABLE_IPV6"
 
 # --- 1. INIT IPSETS ---
 if ! ipset list -n "$IPSET_NAME" >/dev/null 2>&1; then ipset create "$IPSET_NAME" hash:net hashsize 16384 maxelem $MAX_ELEM_V4 counters -exist; fi
 if [ "$ENABLE_IPV6" = "true" ]; then
     if ! ipset list -n "$IPSET_NAME6" >/dev/null 2>&1; then ipset create "$IPSET_NAME6" hash:net family inet6 hashsize 4096 maxelem $MAX_ELEM_V6 counters -exist; fi
+fi
+
+# ==============================================================================
+# DOWNLOAD ENGINE SETUP (VPN TUNNEL SUPPORT)
+# ==============================================================================
+CURL_OPTS="-fsSL --connect-timeout 20 --max-time 60"
+if [ -n "$UPDATE_INTERFACE" ]; then
+    CURL_OPTS="$CURL_OPTS --interface $UPDATE_INTERFACE"
+    echo " -> [VPN MODE] Routing downloads through interface: $UPDATE_INTERFACE"
 fi
 
 # --- 2. UPDATE IPv4 ---
@@ -106,7 +123,7 @@ RAW_FILE="/tmp/blocklist_raw.tmp"
 if [ -z "$SOURCES_V4" ]; then echo " ! No IPv4 sources selected."; else
     for URL in $SOURCES_V4; do 
         echo -n " -> Downloading $(basename "$URL")... "
-        if wget -q -O - "$URL" >> "$RAW_FILE"; then echo "OK"; else echo "FAIL"; fi
+        if curl $CURL_OPTS "$URL" >> "$RAW_FILE"; then echo "OK"; else echo "FAIL"; fi
         echo "" >> "$RAW_FILE"
     done
 fi
@@ -159,7 +176,7 @@ if [ "$ENABLE_IPV6" = "true" ]; then
     if [ -z "$SOURCES_V6" ]; then echo " ! No IPv6 sources selected."; else
         for URL in $SOURCES_V6; do 
             echo -n " -> Downloading $(basename "$URL")... "
-            if wget -q -O - "$URL" >> "$RAW_FILE6"; then echo "OK"; else echo "FAIL"; fi
+            if curl $CURL_OPTS "$URL" >> "$RAW_FILE6"; then echo "OK"; else echo "FAIL"; fi
             echo "" >> "$RAW_FILE6"
         done
     fi
@@ -266,11 +283,11 @@ if [ -n "$BANNED_COUNTRIES" ]; then
     # Download loop for each country
     for country in $BANNED_COUNTRIES; do
         echo " -> Downloading IPv4 for [$country]..."
-        curl -fsSL --connect-timeout 10 --max-time 60 "https://www.ipdeny.com/ipblocks/data/aggregated/${country}-aggregated.zone" 2>/dev/null | awk '{print "add GeoBlock_TMP " $1}' >> /tmp/geo_batch.txt
+        curl $CURL_OPTS "https://www.ipdeny.com/ipblocks/data/aggregated/${country}-aggregated.zone" 2>/dev/null | awk '{print "add GeoBlock_TMP " $1}' >> /tmp/geo_batch.txt
         
         if [ "$ENABLE_IPV6" = "true" ]; then
             echo " -> Downloading IPv6 for [$country]..."
-            curl -fsSL --connect-timeout 10 --max-time 60 "https://www.ipdeny.com/ipv6/ipaddresses/aggregated/${country}-aggregated.zone" 2>/dev/null | awk '{print "add GeoBlock6_TMP " $1}' >> /tmp/geo6_batch.txt
+            curl $CURL_OPTS "https://www.ipdeny.com/ipv6/ipaddresses/aggregated/${country}-aggregated.zone" 2>/dev/null | awk '{print "add GeoBlock6_TMP " $1}' >> /tmp/geo6_batch.txt
         fi
     done
     
