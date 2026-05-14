@@ -1,15 +1,16 @@
 #!/bin/sh
 
 # ==============================================================================
-# KEENETIC FIREWALL HOOK v2.8.0 (GEO-IP INTEGRATION)
+# KEENETIC FIREWALL HOOK v2.8.1 (MASTER SWITCH)
 # Description: Dual-Stack Firewall with Auto-Ban, Connlimit & Port Logging.
 # Features:
+#   - NEW: Global Kill Switch (ENABLE_FIREWALL) to flush and disable all rules.
 #   - NEW: GeoIP Blocking integration (Kernel-level drops for banned countries).
-#   - NEW: DDoS Mitigation with Global & Custom Bypass ConnLimits
+#   - NEW: DDoS Mitigation with Global & Custom Bypass ConnLimits.
 #   - NEW: Sub-chain architecture (FW_CHK_CONN, FW_CHK_BRUTE) for granular bypass.
-#   - NEW: ConnLimit and BruteForce protections now apply to UDP services as well.
-#   - FIX: load_mod grep mode change
-#   - FIX: IPv6 static list restore
+#   - NEW: ConnLimit and BruteForce protections now apply to UDP services.
+#   - FIX: load_mod grep mode change.
+#   - FIX: IPv6 static list restore.
 #   - MODULAR: Conditionally loads Connlimit, BruteForce, and AutoBan rules.
 #   - PERSISTENCE: Restores AutoBan lists from disk on startup/restart.
 #   - WHITELIST: High-priority IPSet for trusted IPs/Subnets.
@@ -103,6 +104,31 @@ BYPASS_CONN_TCP_CSV=$(to_csv "$BYPASS_CONN_TCP")
 BYPASS_CONN_UDP_CSV=$(to_csv "$BYPASS_CONN_UDP")
 BYPASS_BRUTE_TCP_CSV=$(to_csv "$BYPASS_BRUTE_TCP")
 BYPASS_BRUTE_UDP_CSV=$(to_csv "$BYPASS_BRUTE_UDP")
+
+: ${ENABLE_FIREWALL:="true"}
+
+    # --- GLOBAL KILL SWITCH ---
+    if [ "$ENABLE_FIREWALL" = "false" ]; then
+        logger -t "FW_Hook" "Firewall is globally DISABLED. Flushing all custom chains..."
+        
+        # Flush and detach IPv4
+        iptables -D INPUT -j BLOCKLIST_IN 2>/dev/null
+        iptables -D FORWARD -j BLOCKLIST_FWD 2>/dev/null
+        iptables -F BLOCKLIST_IN 2>/dev/null; iptables -X BLOCKLIST_IN 2>/dev/null
+        iptables -F BLOCKLIST_FWD 2>/dev/null; iptables -X BLOCKLIST_FWD 2>/dev/null
+        iptables -F SCAN_TRAP 2>/dev/null; iptables -X SCAN_TRAP 2>/dev/null
+        iptables -F FW_CHK_CONN 2>/dev/null; iptables -X FW_CHK_CONN 2>/dev/null
+        iptables -F FW_CHK_BRUTE 2>/dev/null; iptables -X FW_CHK_BRUTE 2>/dev/null
+
+        # Flush and detach IPv6
+        ip6tables -D INPUT -j BLOCKLIST_IN6 2>/dev/null
+        ip6tables -D FORWARD -j BLOCKLIST_FWD6 2>/dev/null
+        ip6tables -F BLOCKLIST_IN6 2>/dev/null; ip6tables -X BLOCKLIST_IN6 2>/dev/null
+        ip6tables -F BLOCKLIST_FWD6 2>/dev/null; ip6tables -X BLOCKLIST_FWD6 2>/dev/null
+        ip6tables -F SCAN_TRAP6 2>/dev/null; ip6tables -X SCAN_TRAP6 2>/dev/null
+        
+        exit 0
+    fi
 
 # ==============================================================================
 # 1. INITIALIZE IPSETS
