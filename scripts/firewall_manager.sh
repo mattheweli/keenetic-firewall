@@ -1,8 +1,10 @@
 #!/bin/sh
 
 # ==============================================================================
-# KEENETIC FIREWALL MANAGER v2.6.1 (INTERFACE WIZARD)
+# KEENETIC FIREWALL MANAGER v2.6.2 (MASTER SWITCH)
 # Changelog:
+#   - NEW: Master Kill Switch to globally enable/disable the entire firewall.
+#   - UX: Added visual warning on Main Menu if Firewall is globally disabled.
 #   - NEW: Automatic Interface Wizard to select VPN tunnels for updates.
 #   - NEW: Version 2.6.1 includes real-time IP and Traffic detection for selection.
 #   - NEW: GeoIP Blocking configuration menu (Drop entire countries via IPdeny).
@@ -33,8 +35,9 @@ WHITELIST_FILE="/opt/etc/firewall_whitelist.txt"
 KEY_FILE="/opt/etc/AbuseIPDB.key"
 
 # --- DEFAULTS ---
+DEF_ENABLE_FW="true"
 DEF_IPV6="true"
-DEF_FWD_PROT="false" # Default OFF
+DEF_FWD_PROT="false"
 DEF_ENABLE_AUTOBAN="true"
 DEF_ENABLE_BF="true"
 DEF_ENABLE_CONN="true"
@@ -65,7 +68,7 @@ BOLD='\033[1m'; DIM='\033[2m'
 show_header() {
     clear
     echo -e "${BLUE}=================================================${NC}"
-    echo -e "${BOLD}🛡️  KEENETIC FIREWALL MANAGER v2.6.1${NC}"
+    echo -e "${BOLD}🛡️  KEENETIC FIREWALL MANAGER v2.6.2${NC}"
     echo -e "${BLUE}=================================================${NC}"
 }
 
@@ -112,7 +115,8 @@ calculate_seconds() {
 load_config() {
     if [ ! -f "$CONF_FILE" ]; then
         echo "Generating default configuration file..."
-        echo "ENABLE_IPV6=\"$DEF_IPV6\"" > "$CONF_FILE"
+        echo "ENABLE_FIREWALL=\"$DEF_ENABLE_FW\"" > "$CONF_FILE"
+        echo "ENABLE_IPV6=\"$DEF_IPV6\"" >> "$CONF_FILE"
         echo "ENABLE_FWD_PROTECTION=\"$DEF_FWD_PROT\"" >> "$CONF_FILE"
         echo "ENABLE_AUTOBAN=\"$DEF_ENABLE_AUTOBAN\"" >> "$CONF_FILE"
         echo "ENABLE_BRUTEFORCE=\"$DEF_ENABLE_BF\"" >> "$CONF_FILE"
@@ -145,6 +149,7 @@ load_config() {
     
     . "$CONF_FILE"
     
+    : ${ENABLE_FIREWALL:=$DEF_ENABLE_FW}
     : ${ENABLE_IPV6:=$DEF_IPV6}
     : ${ENABLE_FWD_PROTECTION:=$DEF_FWD_PROT}
     : ${ENABLE_AUTOBAN:=$DEF_ENABLE_AUTOBAN}
@@ -177,7 +182,8 @@ load_config() {
 }
 
 save_config() {
-    echo "ENABLE_IPV6=\"$ENABLE_IPV6\"" > "$CONF_FILE"
+    echo "ENABLE_FIREWALL=\"$ENABLE_FIREWALL\"" > "$CONF_FILE"
+    echo "ENABLE_IPV6=\"$ENABLE_IPV6\"" >> "$CONF_FILE"
     echo "ENABLE_FWD_PROTECTION=\"$ENABLE_FWD_PROTECTION\"" >> "$CONF_FILE"
     
     echo "ENABLE_AUTOBAN=\"$ENABLE_AUTOBAN\"" >> "$CONF_FILE"
@@ -706,6 +712,7 @@ do_settings() {
         echo -e "${YELLOW}--- CONFIGURATION SETTINGS ---${NC}"
         
         # Status Flags & Colors
+        if [ "$ENABLE_FIREWALL" = "true" ]; then ST_MST="${GREEN}ON${NC}"; else ST_MST="${BLINK}${RED}OFF (DISABLED)${NC}"; fi
         if [ "$ENABLE_IPV6" = "true" ]; then ST_V6="${GREEN}ON${NC}"; else ST_V6="${RED}OFF${NC}"; fi
         if [ "$ENABLE_FWD_PROTECTION" = "true" ]; then ST_FWD="${GREEN}ON${NC}"; else ST_FWD="${RED}OFF${NC}"; fi
         
@@ -722,6 +729,7 @@ do_settings() {
         UI_UPD_IF="${CYAN}${UPDATE_INTERFACE:-WAN (Standard)}${NC}"
 
         # --- MENU LAYOUT ---
+        echo -e " M) ${MAGENTA}MASTER SWITCH${NC} (Entire Firewall) .... [$ST_MST]"
         echo -e " 1) IPv6 Support ....................... [$ST_V6]"
         echo -e " 2) Forward Protection (NAS/DMZ) ....... [$ST_FWD]"
         echo -e "${DIM} ---------------------------------------${NC}"
@@ -748,6 +756,17 @@ do_settings() {
         read -r SOPT
         
         case $SOPT in
+            m|M) 
+                # Toggle Master Switch and warn user
+                if [ "$ENABLE_FIREWALL" = "true" ]; then 
+                    ENABLE_FIREWALL="false"
+                    echo -e "\n${RED}WARNING: All Firewall protections will be REMOVED.${NC}"
+                    sleep 1
+                else 
+                    ENABLE_FIREWALL="true"
+                fi
+                save_config 
+                ;;
             1) 
                 if [ "$ENABLE_IPV6" = "true" ]; then ENABLE_IPV6="false"; else ENABLE_IPV6="true"; fi
                 save_config 
@@ -1027,9 +1046,16 @@ do_report() { echo -e "${YELLOW}Sending Reports to AbuseIPDB...${NC}"; if [ -x "
 do_restart() { echo -e "${YELLOW}Restarting Firewall Hook (Applying Config)...${NC}"; if [ -x "$SCRIPT_HOOK" ]; then table=filter "$SCRIPT_HOOK"; echo -e "${GREEN}Done.${NC}"; else echo -e "${RED}Hook script missing${NC}"; fi; pause; }
 
 # --- MAIN MENU ---
-load_config
 while true; do
+    load_config
     show_header
+    
+    # Check if Master Switch is OFF and display blinking warning
+    if [ "$ENABLE_FIREWALL" = "false" ]; then
+        echo -e "${BLINK}${RED} ⚠️  WARNING: FIREWALL IS GLOBALLY DISABLED ⚠️ ${NC}"
+        echo -e "${DIM}    (All rules removed. Your router is fully exposed)${NC}\n"
+    fi
+
     echo -e " 1) ${GREEN}📊 Show Live Monitor${NC}"
     echo -e " 2) ${CYAN}🔄 Update Blocklists${NC}"
     echo -e " 3) ${CYAN}📈 Run Stats & Dashboard${NC} "
