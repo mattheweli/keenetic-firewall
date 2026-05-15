@@ -1,14 +1,16 @@
 #!/bin/sh
 
 # ==============================================================================
-# KEENETIC FIREWALL STATS v3.6.0 (GEO-IP INTEGRATION)
+# KEENETIC FIREWALL STATS v3.6.3 (GEO-IP INTEGRATION)
 # ==============================================================================
 # AUTHOR: mattheweli
 # DESCRIPTION: 
 #   Aggregates firewall statistics, parses sniffer data for port mapping,
 #   and generates JSON data for the web dashboard.
 #
-#     - NEW: GeoIP Blocking integration (GeoBlock & GeoBlock6 support)
+#     - NEW: Anti-Loop API logic (prevents wasting AbuseIPDB credits).
+#     - NEW: Private/LAN IP filtering for Geo-enrichment.
+#     - NEW: Version 3.6.3 includes previous DB maintenance (Orphan/VACUUM).
 #     - FIX: IPv6 regex counting fixed for lists
 #     - FIX: Database creation and optimization on first boot
 #     - FIX: Send report minor cosmetic changes 
@@ -100,7 +102,7 @@ NOW=$($DATE_CMD +%s)
 NEW_DROPS_V4=0; NEW_DROPS_V6=0; NEW_DROPS_VPN=0; NEW_DROPS_TRAP=0; NEW_DROPS_TRAP6=0; NEW_DROPS_GEO=0; NEW_DROPS_GEO6=0
 NEW_IP_RECORDS=0
 
-echo "=== Firewall Stats Updater v3.6.0 ==="
+echo "=== Firewall Stats Updater v3.6.3 ==="
 
 # ==============================================================================
 # 3. DATABASE INITIALIZATION & TUNING
@@ -496,9 +498,33 @@ get_ip_table() {
     sqlite3 -separator "|" "$DB_FILE" "$QUERY" | while IFS='|' read -r IP COUNT CO SC DO PORT TYPE PHIST; do
         CLEAN_IP=$(echo "$IP" | cut -d'/' -f1)
         if [ -z "$CO" ] && [ -n "$ABUSEIPDB_KEY" ]; then
-             J=$(curl -s -m 3 -G https://api.abuseipdb.com/api/v2/check --data-urlencode "ipAddress=$CLEAN_IP" -d maxAgeInDays=90 -H "Key: $ABUSEIPDB_KEY" -H "Accept: application/json" || echo "")
-             CO=$(echo "$J"|grep -o '"countryCode":"[^"]*"'|cut -d'"' -f4); SC=$(echo "$J"|grep -o '"abuseConfidenceScore":[0-9]*'|cut -d':' -f2); DO=$(echo "$J"|grep -o '"domain":"[^"]*"'|cut -d'"' -f4)
-             if [ -n "$CO" ]; then sqlite3 "$DB_FILE" "INSERT OR REPLACE INTO ip_info (ip, country, risk, domain, updated, target_port, port_history) VALUES ('$CLEAN_IP', '$CO', ${SC:-0}, '$DO', $NOW, ${PORT:-NULL}, '$PHIST');"; fi
+            # 1. Lifesaver filter: ignore private and Multicast IPs
+            if echo "$CLEAN_IP" | grep -qE '^(192\.168|10\.|172\.(1[6-9]|2[0-9]|3[0-1])|127\.|255\.|224\.|::1|fe80:)'; then
+                CO="LAN"; SC=0; DO="Local/Private"
+            
+            # 2. Anti-Churn filter: ignore IPs with fewer than 5 hits (prevents background noise from draining API)
+            elif [ "$COUNT" -lt 5 ]; then
+                CO="--"; SC=0; DO="Skipped (Low Volume)"
+            
+            else
+                # 3. Query AbuseIPDB only for real Public IPs with >= 5 hits
+                J=$(curl -s -m 3 -G https://api.abuseipdb.com/api/v2/check --data-urlencode "ipAddress=$CLEAN_IP" -d maxAgeInDays=90 -H "Key: $ABUSEIPDB_KEY" -H "Accept: application/json" || echo "")
+                CO=$(echo "$J"|grep -o '"countryCode":"[^"]*"'|cut -d'"' -f4)
+                SC=$(echo "$J"|grep -o '"abuseConfidenceScore":[0-9]*'|cut -d':' -f2)
+                DO=$(echo "$J"|grep -o '"domain":"[^"]*"'|cut -d'"' -f4)
+                
+                # 4. Anti-Loop Patch: If AbuseIPDB fails (Rate Limit, Timeout, or 404)
+                if [ -z "$CO" ]; then 
+                    CO="XX"; SC=0; DO="Rate Limited/Unknown"
+                fi
+            fi
+            
+            # 5. Sanitize strings for SQLite to prevent SQL Injection breaking the INSERT
+            DO_SAFE=$(echo "$DO" | sed "s/'/''/g")
+            PHIST_SAFE=$(echo "$PHIST" | sed "s/'/''/g")
+            
+            # 6. ALWAYS save the result to break the infinite query loop
+            sqlite3 "$DB_FILE" "INSERT OR REPLACE INTO ip_info (ip, country, risk, domain, updated, target_port, port_history) VALUES ('$CLEAN_IP', '$CO', ${SC:-0}, '$DO_SAFE', $NOW, ${PORT:-NULL}, '$PHIST_SAFE');"
         fi
         
         SC=${SC:-0}; [ "$SC" -ge 50 ] && ST="color:var(--red);font-weight:bold;" || ST="color:var(--green);"
@@ -726,7 +752,6 @@ sqlite3 "$DB_FILE" "
 BEGIN TRANSACTION;
 
 -- 1. ROLLUP GLOBAL DROPS (Ad Infinitum compression)
--- Fonde i dati vecchi di 24h. Posiziona il timestamp fuso alle 12:00 UTC per evitare salti di fuso orario.
 CREATE TEMP TABLE IF NOT EXISTS drops_rollup AS 
     SELECT ((timestamp / 86400) * 86400) + 43200 AS day_ts, list_name, SUM(count) AS total_count 
     FROM drops 
@@ -738,7 +763,6 @@ INSERT INTO drops (timestamp, list_name, count)
 DROP TABLE drops_rollup;
 
 -- 2. ROLLUP IP DROPS (Preserve dashboard 1y/All-Time data)
--- Fonde gli attacchi dello stesso IP. Protegge le ultime 24h in modo assoluto.
 CREATE TEMP TABLE IF NOT EXISTS ip_drops_rollup AS 
     SELECT ((timestamp / 86400) * 86400) + 43200 AS day_ts, ip, SUM(count) AS total_count, list_type 
     FROM ip_drops 
@@ -749,11 +773,19 @@ INSERT INTO ip_drops (timestamp, ip, count, list_type)
     SELECT day_ts, ip, total_count, list_type FROM ip_drops_rollup;
 DROP TABLE ip_drops_rollup;
 
--- 3. NOISE REDUCTION (Optional Garbage Collection)
--- Rimuove dal database gli IP 'fantasma' (es. un singolo ping isolato) più vecchi di 30 giorni
-DELETE FROM ip_drops WHERE timestamp < $THIRTY_DAYS AND count <= 3;
+-- 3. NOISE REDUCTION (Aggressive Garbage Collection)
+-- Rimuove dal database gli IP 'fantasma' più vecchi di 30 giorni (Soglia alzata a 5)
+DELETE FROM ip_drops WHERE timestamp < $THIRTY_DAYS AND count <= 5;
+
+-- 4. ORPHAN CLEANUP (Pulisce i metadati pesanti)
+-- Elimina nazione, dominio e porte per gli IP che non hanno più log attivi
+DELETE FROM ip_info WHERE ip NOT IN (SELECT DISTINCT CASE WHEN INSTR(ip, '/') > 0 THEN SUBSTR(ip, 1, INSTR(ip, '/') - 1) ELSE ip END FROM ip_drops);
 
 COMMIT;
+
+-- 5. RECLAIM DISK SPACE
+-- Deframmenta e rimpicciolisce fisicamente il file su disco
+VACUUM;
 "
 
 DB_SIZE_H=$(du -h "$DB_FILE" 2>/dev/null | awk '{print $1}')
