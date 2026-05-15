@@ -1,8 +1,9 @@
 #!/bin/sh
 
 # ==============================================================================
-# BLOCKLIST UPDATER v2.4.0 (VPN TUNNEL & GEO-IP INTEGRATION)
+# BLOCKLIST UPDATER v2.4.1 (GEO-PERSISTENCE)
 # Features: 
+# - NEW: GeoIP Persistence (Saves GeoBlock lists to disk for instant restore).
 # - NEW: Download via specific VPN Interface (--interface) to bypass ISP blocks.
 # - NEW: Unified GeoIP aggregate total and difference logic (+X, -X, =0).
 # - NEW: GeoIP Blocking (Downloads aggregated country zones from IPdeny).
@@ -48,7 +49,6 @@ MAX_ELEM_V6=65536
 # --- SECURE KEY LOADING ---
 KEY_FILE="/opt/etc/AbuseIPDB.key"
 if [ -s "$KEY_FILE" ]; then
-    # Read key and strip any whitespace/newlines
     ABUSEIPDB_KEY=$(cat "$KEY_FILE" | tr -d '[:space:]')
 else
     ABUSEIPDB_KEY=""
@@ -63,9 +63,10 @@ DIFF_FILE_VPN="/opt/etc/firewall_vpn_diff.dat"
 DIFF_FILE_GEO="/opt/etc/firewall_geo_diff.dat"
 DIFF_FILE_GEO6="/opt/etc/firewall_geo6_diff.dat"
 
-# [MODIFIED] Separate Backup Files
 BACKUP_FILE_V4="/opt/etc/firewall_blocklist.save"
 BACKUP_FILE_V6="/opt/etc/firewall_blocklist6.save"
+BACKUP_GEO_V4="/opt/etc/firewall_geoblock.save"
+BACKUP_GEO_V6="/opt/etc/firewall_geoblock6.save"
 
 LOG_TAG="Firewall_Update"
 
@@ -74,20 +75,17 @@ RES_V4="0"; CHG_V4="=0"
 RES_V6="0"; CHG_V6="=0"
 RES_VPN="0"; CHG_VPN="0"
 
-# Helper: Calc Diff
 calc_diff() {
     old_cnt=$1; new_cnt=$2; file=$3
     diff=$((new_cnt - old_cnt))
     if [ "$diff" -ge 0 ]; then echo "+$diff" > "$file"; else echo "$diff" > "$file"; fi
 }
 
-# Helper: Optimizer
 optimize_list_v4() {
     IN_FILE=$1; OUT_FILE=$2
     if command -v iprange >/dev/null 2>&1; then iprange --optimize "$IN_FILE" > "$OUT_FILE"; return 0; else sort -u "$IN_FILE" > "$OUT_FILE"; return 1; fi
 }
 
-# Helper: Turbo Load
 load_turbo() {
     SET_NAME=$1; FILE_CLEAN=$2
     LINE_COUNT=$(wc -l < "$FILE_CLEAN")
@@ -95,7 +93,7 @@ load_turbo() {
     sed "s/^/add $SET_NAME /" "$FILE_CLEAN" | ipset restore -!
 }
 
-echo "=== Firewall Blocklist Updater v2.4.0 ==="
+echo "=== Firewall Blocklist Updater v2.4.1 ==="
 echo "[$(date '+%H:%M:%S')] Starting update. IPv6 Mode: $ENABLE_IPV6"
 
 # --- 1. INIT IPSETS ---
@@ -148,7 +146,6 @@ else
     
     CNT_V4_NEW=$(ipset list "$IPSET_TMP_NAME" | grep -cE '^[0-9]')
     if ipset swap "$IPSET_TMP_NAME" "$IPSET_NAME"; then
-        # [MODIFIED] Explicit Save for IPv4
         ipset save "$IPSET_NAME" > "$BACKUP_FILE_V4"
         
         calc_diff "$CNT_V4_OLD" "$CNT_V4_NEW" "$DIFF_FILE_V4"
@@ -216,7 +213,6 @@ if [ "$ENABLE_IPV6" = "true" ]; then
         CNT_V6_NEW=$(ipset list "$IPSET_TMP_NAME6" | grep -cE '^[0-9a-fA-F:]')
 
         if ipset swap "$IPSET_TMP_NAME6" "$IPSET_NAME6"; then
-            # [MODIFIED] Explicit Save for IPv6
             ipset save "$IPSET_NAME6" > "$BACKUP_FILE_V6"
             
             calc_diff "$CNT_V6_OLD" "$CNT_V6_NEW" "$DIFF_FILE_V6"
@@ -259,7 +255,6 @@ if [ -n "$BANNED_COUNTRIES" ]; then
     echo "------------------------------------------------"
     echo "PHASE 4: GeoIP Blocklists ($BANNED_COUNTRIES)"
     
-    # 1. Grab old sizes before doing anything
     GEO_OLD=$(ipset list GeoBlock 2>/dev/null | grep -cE '^[0-9]')
     GEO_OLD=${GEO_OLD:-0}
     GEO6_OLD=0
@@ -271,7 +266,6 @@ if [ -n "$BANNED_COUNTRIES" ]; then
     : > /tmp/geo_batch.txt
     : > /tmp/geo6_batch.txt
     
-    # Create temporary sets for invisible update
     ipset create GeoBlock_TMP hash:net family inet hashsize 1024 maxelem 262144 counters 2>/dev/null
     ipset flush GeoBlock_TMP
     
@@ -280,7 +274,6 @@ if [ -n "$BANNED_COUNTRIES" ]; then
         ipset flush GeoBlock6_TMP
     fi
 
-    # Download loop for each country
     for country in $BANNED_COUNTRIES; do
         echo " -> Downloading IPv4 for [$country]..."
         curl $CURL_OPTS "https://www.ipdeny.com/ipblocks/data/aggregated/${country}-aggregated.zone" 2>/dev/null | awk '{print "add GeoBlock_TMP " $1}' >> /tmp/geo_batch.txt
@@ -291,13 +284,14 @@ if [ -n "$BANNED_COUNTRIES" ]; then
         fi
     done
     
-    # Massive injection and Swap (No disconnections)
     echo " -> Applying GeoIP rules to kernel..."
     ipset restore -! < /tmp/geo_batch.txt
     ipset swap GeoBlock_TMP GeoBlock
     ipset destroy GeoBlock_TMP
     
-    # Calculate IPv4 Diff
+    # [NEW] GeoIP Persistence
+    ipset save GeoBlock > "$BACKUP_GEO_V4" 2>/dev/null
+    
     GEO_NEW=$(ipset list GeoBlock 2>/dev/null | grep -cE '^[0-9]')
     calc_diff "$GEO_OLD" "$GEO_NEW" "$DIFF_FILE_GEO"
     CHG_GEO=$(cat "$DIFF_FILE_GEO")
@@ -307,7 +301,9 @@ if [ -n "$BANNED_COUNTRIES" ]; then
         ipset swap GeoBlock6_TMP GeoBlock6
         ipset destroy GeoBlock6_TMP
         
-        # Calculate IPv6 Diff
+        # [NEW] GeoIP Persistence (v6)
+        ipset save GeoBlock6 > "$BACKUP_GEO_V6" 2>/dev/null
+        
         GEO6_NEW=$(ipset list GeoBlock6 2>/dev/null | grep -cE '^[0-9a-fA-F:]')
         calc_diff "$GEO6_OLD" "$GEO6_NEW" "$DIFF_FILE_GEO6"
         CHG_GEO6=$(cat "$DIFF_FILE_GEO6")
@@ -316,14 +312,15 @@ if [ -n "$BANNED_COUNTRIES" ]; then
     rm -f /tmp/geo_batch.txt /tmp/geo6_batch.txt
     echo " -> GeoIP Successfully Updated."
 else
-    # Auto-cleanup: Flush sets if the user disabled GeoIP in the Manager
     if ipset list GeoBlock >/dev/null 2>&1; then 
         ipset flush GeoBlock 2>/dev/null
         echo "=0" > "$DIFF_FILE_GEO"
+        > "$BACKUP_GEO_V4"
     fi
     if ipset list GeoBlock6 >/dev/null 2>&1; then 
         ipset flush GeoBlock6 2>/dev/null
         echo "=0" > "$DIFF_FILE_GEO6"
+        > "$BACKUP_GEO_V6"
     fi
 fi
 
@@ -344,7 +341,6 @@ if [ "$ENABLE_IPV6" = "true" ]; then
 fi
 echo " VPN Optimized: $CHG_VPN (Total: $RES_VPN)"
 
-# GeoIP Summary Addition
 if [ -n "$BANNED_COUNTRIES" ]; then
     GEO_V4=$(ipset list GeoBlock 2>/dev/null | grep -cE '^[0-9]')
     GEO_V4=${GEO_V4:-0}
@@ -354,19 +350,13 @@ if [ -n "$BANNED_COUNTRIES" ]; then
         GEO_V6=${GEO_V6:-0}
     fi
     
-    # Calculate aggregated totals (v4 + v6)
     TOT_GEO=$((GEO_V4 + GEO_V6))
     TOT_OLD=$((GEO_OLD + GEO6_OLD))
     TOT_DIFF=$((TOT_GEO - TOT_OLD))
     
-    # Visual formatting of the difference (+X, -X, =0)
-    if [ "$TOT_DIFF" -gt 0 ]; then 
-        STR_DIFF="+$TOT_DIFF"
-    elif [ "$TOT_DIFF" -lt 0 ]; then 
-        STR_DIFF="$TOT_DIFF"
-    else 
-        STR_DIFF="=0"
-    fi
+    if [ "$TOT_DIFF" -gt 0 ]; then STR_DIFF="+$TOT_DIFF"
+    elif [ "$TOT_DIFF" -lt 0 ]; then STR_DIFF="$TOT_DIFF"
+    else STR_DIFF="=0"; fi
     
     echo " GeoIP Lists: $TOT_GEO subnets ($STR_DIFF)"
 fi
