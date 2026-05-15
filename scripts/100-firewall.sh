@@ -1,9 +1,10 @@
 #!/bin/sh
 
 # ==============================================================================
-# KEENETIC FIREWALL HOOK v2.8.1 (MASTER SWITCH)
+# KEENETIC FIREWALL HOOK v2.8.2 (MASTER SWITCH)
 # Description: Dual-Stack Firewall with Auto-Ban, Connlimit & Port Logging.
 # Features:
+#   - NEW: Restore GeoIP lists from disk if backup files exist
 #   - NEW: Global Kill Switch (ENABLE_FIREWALL) to flush and disable all rules.
 #   - NEW: GeoIP Blocking integration (Kernel-level drops for banned countries).
 #   - NEW: DDoS Mitigation with Global & Custom Bypass ConnLimits.
@@ -178,6 +179,10 @@ if [ "$ENABLE_IPV6" = "true" ]; then
         ipset create GeoBlock6 hash:net family inet6 hashsize 1024 maxelem 262144 counters -exist
     fi
 fi
+
+# [NEW] Restore GeoIP lists from disk if backup files exist
+[ -f "/opt/etc/firewall_geoblock.save" ] && ipset restore -! < "/opt/etc/firewall_geoblock.save" 2>/dev/null
+[ -f "/opt/etc/firewall_geoblock6.save" ] && ipset restore -! < "/opt/etc/firewall_geoblock6.save" 2>/dev/null
 
 # IPv4 AutoBan (Modified for Persistence)
 if ! ipset list -n "$IPSET_AUTOBAN" >/dev/null 2>&1; then
