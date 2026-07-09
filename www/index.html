@@ -1,4 +1,4 @@
-<!-- Firewall Dashboard v1.2.0 -->
+<!-- Firewall Dashboard v2.0.0 -->
 
 <!DOCTYPE html>
 <html lang="en">
@@ -106,10 +106,12 @@
         .card { 
             background: var(--background); padding: 20px 24px; border-radius: 8px; 
             box-shadow: var(--box-shadow-1); border: 1px solid var(--dashboard-card-border); 
-            display: flex; flex-direction: column; gap: 8px;
+            display: flex; flex-direction: column; gap: 8px; min-height: 120px;
         }
         .card h3 { margin: 0; font-size: 12px; text-transform: uppercase; color: var(--text-gray); font-weight: 500; }
         .card .val { font-size: 28px; font-weight: 700; line-height: 1.2; }
+        
+        .time-since { font-size: 11px; color: var(--text-gray); margin-top: auto; }
         
         /* Badges (Diffs) */
         .diff { font-size: 12px; font-weight: 500; padding: 2px 8px; border-radius: 4px; margin-left: 8px; vertical-align: middle; display: inline-block; }
@@ -188,6 +190,27 @@
 		#view_history td:last-child { font-weight: 700; }
         .col-geo { color: #00bcd4; }
 		
+		/* Toggle Switch Firewall (Keenetic Native Style) */
+        .fw-status-label { display: flex; align-items: center; font-size: 14px; font-weight: 500; margin-right: 16px; color: var(--primary-text); }
+        .switch { position: relative; display: inline-block; width: 36px; height: 20px; margin-left: 8px; vertical-align: middle; }
+        .switch input { opacity: 0; width: 0; height: 0; }
+        .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: var(--stroke); transition: 0.25s cubic-bezier(0.4, 0, 0.2, 1); border-radius: 20px; }
+        .slider:before { position: absolute; content: ""; height: 16px; width: 16px; left: 2px; bottom: 2px; background-color: #fff; transition: 0.25s cubic-bezier(0.4, 0, 0.2, 1); border-radius: 50%; box-shadow: 0 1px 3px rgba(0,0,0,0.3); }
+        input:checked + .slider { background-color: var(--primary-color); }
+        input:checked + .slider:before { transform: translateX(16px); }
+		
+		/* LOG VIEWER STYLES */
+        .log-container details { background: var(--background); border: 1px solid var(--stroke); border-radius: 8px; margin-bottom: 24px; overflow: hidden; box-shadow: var(--box-shadow-1); }
+        .log-container summary { padding: 12px 20px; font-weight: 500; cursor: pointer; list-style: none; display: flex; justify-content: space-between; align-items: center; color: var(--primary-text); font-size: 14px; transition: background 0.1s; }
+        .log-container summary::-webkit-details-marker { display: none; }
+        .log-container summary:hover { background: rgba(0,0,0,0.02); }
+        .log-title { display: flex; align-items: center; gap: 8px; color: var(--primary-text); text-transform: uppercase; }
+        .log-controls { display: flex; gap: 16px; align-items: center; }
+        .btn-log { padding: 0; font-size: 13px; border: none; background: transparent; color: var(--primary-color); cursor: pointer; font-weight: 500; font-family: inherit; text-decoration: none; }
+        .btn-log:hover { text-decoration: underline; }
+        .log-viewer { background-color: #12161c; color: #4af626; font-family: 'Courier New', Courier, monospace; font-size: 12px; padding: 16px 20px; max-height: 350px; overflow-y: auto; white-space: pre-wrap; line-height: 1.5; border-top: 1px solid var(--stroke); }
+        .log-meta { font-size: 12px; color: var(--text-gray); margin-left: 8px; font-weight: 400; text-transform: none;}
+		
 
         /* MODAL STYLES */
         .modal { display: none; position: fixed; z-index: 1000; left: 0; top: 0; width: 100%; height: 100%; overflow: auto; background-color: rgba(0,0,0,0.4); backdrop-filter: blur(2px); }
@@ -217,6 +240,13 @@
             Keenetic Firewall Stats
         </h1>
         <div class="header-controls">
+			<div class="fw-status-label">
+                Tracking:
+                <label class="switch" title="Enable/Disable Global Firewall">
+                    <input type="checkbox" id="fw_toggle" onchange="toggleFirewall(this)">
+                    <span class="slider"></span>
+                </label>
+            </div>
             <div id="loading_dot" class="update-dot"></div>
             <div class="refresh-wrapper">
                 <select id="refresh_timer" class="refresh-select" onchange="changeRefreshRate(this.value)">
@@ -240,29 +270,60 @@
             <div class="clock-badge">Updated: <span id="last_update_header">-</span></div>
         </div>
     </div>
-
+	<div class="card" style="margin-bottom: 24px; flex-direction: row; flex-wrap: wrap; justify-content: space-between; align-items: center; min-height: auto; padding: 12px 24px;">
+        <div class="section-title" style="margin-bottom: 0;">Quick IP Control</div>
+        <div style="display: flex; gap: 10px; flex-wrap: wrap; flex: 1; max-width: 600px; margin-left: 20px;">
+            <input type="text" id="ip_input" placeholder="enter IPv4 or IPv6 address" style="padding: 8px; border-radius: 4px; border: 1px solid var(--stroke); flex: 1; min-width: 150px; background: var(--background); color: var(--primary-text);">
+            <button class="btn-action" onclick="lookupIP()">Check</button>
+            <button class="btn-action" style="color: var(--red); border-color: var(--red);" onclick="banIP()">Ban</button>
+            <button class="btn-action" style="color: var(--green); border-color: var(--green);" onclick="unbanIP(document.getElementById('ip_input').value)">Unban</button>
+        </div>
+        <div id="ip_status_result" style="width: 100%; margin-top: 10px; font-size: 13px; font-weight: bold;"></div>
+    </div>
     <div class="grid-cards">
         <div class="card">
-            <h3>IPv4 Blocklist</h3>
-            <div style="display:flex; align-items:center;">
-                <span class="val" style="color:var(--red)" id="size_main">-</span>
-                <span id="diff_v4"></span>
+            <h3>🌐 Internet Blocklists</h3>
+            <div>
+                <span class="val" style="color:var(--red)" id="size_main_total">-</span>
+                <div style="display: grid; grid-template-columns: 18px max-content auto; gap: 4px 10px; font-size:12px; color:var(--text-gray); margin-top:8px; align-items: center;">
+                    <span>v4:</span>
+                    <b style="color:var(--primary-text); text-align:right;" id="size_main">-</b>
+                    <span id="diff_v4"></span>
+                    
+                    <span class="v6-element">v6:</span>
+                    <b class="v6-element" style="color:var(--primary-text); text-align:right;" id="size_main6">-</b>
+                    <span class="v6-element" id="diff_v6"></span>
+                </div>
             </div>
+            <div class="time-since" style="margin-top: 12px;" id="time_main"></div>
         </div>
-        <div class="card" id="card_v6">
-            <h3>IPv6 Blocklist</h3>
-            <div style="display:flex; align-items:center;">
-                <span class="val" style="color:var(--purple)" id="size_main6">-</span>
-                <span id="diff_v6"></span>
+
+        <div class="card">
+            <h3>🛑 Manual Blocklists</h3>
+            <div>
+                <span class="val" style="color:var(--purple)" id="size_manual_total">-</span>
+                <div style="display: grid; grid-template-columns: 18px max-content auto; gap: 4px 10px; font-size:12px; color:var(--text-gray); margin-top:8px; align-items: center;">
+                    <span>v4:</span>
+                    <b style="color:var(--primary-text); text-align:right;" id="size_manual">-</b>
+                    <span id="diff_manual"></span>
+                    
+                    <span class="v6-element">v6:</span>
+                    <b class="v6-element" style="color:var(--primary-text); text-align:right;" id="size_manual6">-</b>
+                    <span class="v6-element" id="diff_manual6"></span>
+                </div>
             </div>
+            <div class="time-since" style="margin-top: 12px;" id="time_manual"></div>
         </div>
+
         <div class="card">
             <h3>VPN Blocklist</h3>
             <div style="display:flex; align-items:center;">
                 <span class="val" style="color:var(--orange)" id="size_vpn">-</span>
                 <span id="diff_vpn"></span>
             </div>
+            <div class="time-since" id="time_vpn"></div>
         </div>
+
         <div class="card">
             <h3>🪤 Auto-Ban Trap</h3>
             <div>
@@ -272,11 +333,12 @@
                     <b style="color:var(--primary-text); text-align:right;" id="size_trap">-</b>
                     <span id="diff_trap"></span>
                     
-                    <span>v6:</span>
-                    <b style="color:var(--primary-text); text-align:right;" id="size_trap6">-</b>
-                    <span id="diff_trap6"></span>
+                    <span class="v6-element">v6:</span>
+                    <b class="v6-element" style="color:var(--primary-text); text-align:right;" id="size_trap6">-</b>
+                    <span class="v6-element" id="diff_trap6"></span>
                 </div>
             </div>
+            <div class="time-since" style="margin-top: 12px;" id="time_trap"></div>
         </div>
 
         <div class="card">
@@ -288,16 +350,35 @@
                     <b style="color:var(--primary-text); text-align:right;" id="size_geo">-</b>
                     <span id="diff_geo"></span>
                     
-                    <span>v6:</span>
-                    <b style="color:var(--primary-text); text-align:right;" id="size_geo6">-</b>
-                    <span id="diff_geo6"></span>
+                    <span class="v6-element">v6:</span>
+                    <b class="v6-element" style="color:var(--primary-text); text-align:right;" id="size_geo6">-</b>
+                    <span class="v6-element" id="diff_geo6"></span>
                 </div>
             </div>
+            <div class="time-since" style="margin-top: 12px;" id="time_geo"></div>
         </div>
+
         <div class="card">
             <h3>Total Drops (Lifetime)</h3>
             <div class="val" style="color:var(--blue)" id="lifetime">-</div>
         </div>
+    </div>
+	
+	<div class="log-container">
+        <details id="details_ulogd" ontoggle="toggleUlogd(this)">
+            <summary>
+                <div class="log-title">
+                    <span>🔥 Live ULOGD Firewall</span>
+                    <span id="size_ulogd" class="log-meta"></span>
+                </div>
+                <div class="log-controls">
+                    <button class="btn-log" onclick="downloadUlogd(event)">Save to file</button>
+                    <button class="btn-log" onclick="fetchUlogd(true, event)">Refresh</button>
+                    <span style="color:var(--stroke); font-size:10px;">▼</span>
+                </div>
+            </summary>
+            <div class="log-viewer" id="content_ulogd">Click to load the live log...</div>
+        </details>
     </div>
 
     <div class="main-tabs">
@@ -477,6 +558,38 @@
     <div class="footer">&copy; <span id="year"></span> mattheweli &nbsp;&bull;&nbsp; Uptime: <span id="uptime">-</span></div>
     
     <script>
+	
+		// TIME GLOBALS
+        let listTimestamps = { main: "", manual: "", vpn: "", trap: "", geo: "" };
+
+        // Function to format the exact timestamp
+        function formatTimeExact(dateString) {
+            if (!dateString) return "";
+            
+            // The format coming from bash is "DD-MM-YYYY HH:MM:SS"
+            const parts = dateString.split(/[- :]/);
+            if(parts.length < 5) return "";
+            
+            const day = parts[0];
+            const month = parts[1];
+            const year = parts[2];
+            const hours = parts[3];
+            const minutes = parts[4];
+
+            // Returns the time in the format "Last update: 04.00 on 30/06/2026"
+            return `Updated: ${hours}.${minutes} on ${day}/${month}/${year}`;
+        }
+
+        // Function that injects the formatted text into the cards
+        function updateTimeText() {
+            for (const [key, timestamp] of Object.entries(listTimestamps)) {
+                if (timestamp) {
+                    const el = document.getElementById('time_' + key);
+                    if (el) el.textContent = formatTimeExact(timestamp);
+                }
+            }
+        }
+		
         function showMainTab(id) {
             document.querySelectorAll('.view-section').forEach(e => e.classList.remove('active'));
             document.querySelectorAll('.main-tab-btn').forEach(e => e.classList.remove('active'));
@@ -688,8 +801,27 @@
                     } 
                 };
                 
-                document.getElementById('size_main').innerText = d.lists.main; setDiff('diff_v4', d.lists.diff_v4);
-                document.getElementById('size_main6').innerText = d.lists.main6; setDiff('diff_v6', d.lists.diff_v6);
+                // --- INTERNET BLOCKLISTS CALCS ---
+                const m4 = parseInt(d.lists.main) || 0;
+                const m6 = parseInt(d.lists.main6) || 0;
+                document.getElementById('size_main_total').innerText = (m4 + m6);
+                document.getElementById('size_main').innerText = m4;
+                document.getElementById('size_main6').innerText = m6;
+                setDiff('diff_v4', d.lists.diff_v4);
+                setDiff('diff_v6', d.lists.diff_v6);
+
+                // --- MANUAL BLOCKLISTS CALCS ---
+                const man4 = parseInt(d.lists.manual) || 0;
+                const man6 = parseInt(d.lists.manual6) || 0;
+                if (document.getElementById('size_manual_total')) {
+                    document.getElementById('size_manual_total').innerText = (man4 + man6);
+                    document.getElementById('size_manual').innerText = man4;
+                    document.getElementById('size_manual6').innerText = man6;
+                    setDiff('diff_manual', d.lists.diff_manual);
+                    setDiff('diff_manual6', d.lists.diff_manual6);
+                }
+
+                // --- VPN & TRAP & GEO CALCS ---
                 document.getElementById('size_vpn').innerText = d.lists.vpn; setDiff('diff_vpn', d.lists.diff_vpn);
                 
                 const t4 = parseInt(d.lists.trap_ips) || 0;
@@ -699,8 +831,7 @@
                 document.getElementById('size_trap6').innerText = t6;
                 setDiff('diff_trap', d.lists.diff_trap);
                 setDiff('diff_trap6', d.lists.diff_trap6);
-				
-				// --- GEOIP CALCS ---
+                
                 const g4 = parseInt(d.lists.geo) || 0;
                 const g6 = parseInt(d.lists.geo6) || 0;
                 document.getElementById('size_geo_total').innerText = (g4 + g6);
@@ -709,7 +840,18 @@
                 setDiff('diff_geo', d.lists.diff_geo);
                 setDiff('diff_geo6', d.lists.diff_geo6);
                 
-                document.getElementById('lifetime').innerText = d.lifetime; document.getElementById('uptime').innerText = d.uptime; document.getElementById('last_update_header').innerText = d.updated;
+                // --- LIFETIME & UPTIME ---
+                document.getElementById('lifetime').innerText = d.lifetime; 
+                document.getElementById('uptime').innerText = d.uptime; 
+                document.getElementById('last_update_header').innerText = d.updated;
+                
+                // --- UPDATE DYNAMIC TIME ---
+                if (d.lists.up_main) listTimestamps.main = d.lists.up_main;
+                if (d.lists.up_manual) listTimestamps.manual = d.lists.up_manual;
+                if (d.lists.up_vpn) listTimestamps.vpn = d.lists.up_vpn;
+                if (d.lists.up_trap) listTimestamps.trap = d.lists.up_trap;
+                if (d.lists.up_geo) listTimestamps.geo = d.lists.up_geo;
+                updateTimeText();
                 
                 document.getElementById('tb_top_days').innerHTML = d.tables.top_days;
                 document.getElementById('tb_hourly').innerHTML = d.tables.hourly; document.getElementById('tb_daily').innerHTML = d.tables.daily;
@@ -724,16 +866,16 @@
                     document.getElementById('tb_trap_'+p).innerHTML = d.tables['trap_'+p];
                     document.getElementById('tb_other_'+p).innerHTML = d.tables['other_'+p];
                     document.getElementById('tb_nets_'+p).innerHTML = d.tables['nets_'+p];
-					document.getElementById('tb_geo_'+p).innerHTML = d.tables['geo_'+p];
+                    document.getElementById('tb_geo_'+p).innerHTML = d.tables['geo_'+p];
                     document.getElementById('tb_ipv6_'+p).innerHTML = d.tables['ipv6_'+p];
                     if(d.tables['ports_'+p]) document.getElementById('tb_ports_'+p).innerHTML = d.tables['ports_'+p];
                     if(d.tables['brute_'+p]) document.getElementById('tb_brute_'+p).innerHTML = d.tables['brute_'+p];
                 });
-				updateMap('24h');
+                updateMap('24h');
                 
+                // HIDE IPV6 GLOBALLY se disabilitato
                 if (d.ipv6_status === "false") {
-                    if(document.getElementById('card_v6')) document.getElementById('card_v6').style.display = 'none';
-                    document.querySelectorAll('.col-v6').forEach(el => el.style.display = 'none');
+                    document.querySelectorAll('.col-v6, .v6-element').forEach(el => el.style.display = 'none');
                 }
             }
         }
@@ -745,14 +887,160 @@
         }
 
         window.onload = function() {
-            // Imposta l'anno corrente in automatico nel footer
             document.getElementById('year').textContent = new Date().getFullYear();
-            
+            checkFirewallStatus();
             fetchStats();
             const savedRate = localStorage.getItem('fw_stats_refresh_rate') || "0";
             document.getElementById('refresh_timer').value = savedRate;
             changeRefreshRate(savedRate);
         };
+		
+		// --- FIREWALL API FUNCTIONS ---
+        async function lookupIP() {
+            const ip = document.getElementById('ip_input').value.trim();
+            if (!ip) return;
+            
+            const resDiv = document.getElementById('ip_status_result');
+            resDiv.innerHTML = "Searching...";
+            
+            try {
+                const res = await fetch(`firewall_api.php?action=lookup&ip=${ip}`);
+                const data = await res.json();
+                
+                if (data.status === "error") {
+                    resDiv.innerHTML = `<span style="color:var(--red)">Error: ${data.message}</span>`;
+                } else if (data.blocked) {
+                    resDiv.innerHTML = `<span style="color:var(--red)">IP ${ip} is currently BLOCKED in: ${data.lists.join(', ')}</span>`;
+                } else {
+                    resDiv.innerHTML = `<span style="color:var(--green)">IP ${ip} is NOT blocked.</span>`;
+                }
+            } catch (e) {
+                resDiv.innerHTML = `<span style="color:var(--red)">API communication error. Check PHP backend.</span>`;
+            }
+        }
+
+        async function banIP() {
+            const ip = document.getElementById('ip_input').value.trim();
+            if (!ip) return;
+            if(confirm(`Are you sure you want to manually BLOCK ${ip}?`)) {
+                await fetch(`firewall_api.php?action=ban&ip=${ip}`);
+                alert(`IP ${ip} successfully blocked.`);
+                lookupIP();
+                fetchStats(); // Auto-refresh dashboard
+            }
+        }
+
+        async function unbanIP(ip) {
+            if (!ip) return;
+            if(confirm(`Are you sure you want to UNBLOCK and remove ${ip}?`)) {
+                await fetch(`firewall_api.php?action=unban&ip=${ip}`);
+                alert(`IP ${ip} successfully unblocked.`);
+                // If it was called from the quick search, clear it
+                if(document.getElementById('ip_input').value === ip) {
+                    document.getElementById('ip_status_result').innerHTML = "";
+                    document.getElementById('ip_input').value = "";
+                }
+                fetchStats(); // Auto-refresh dashboard
+            }
+        }
+		
+		// Check the current firewall status on startup
+        async function checkFirewallStatus() {
+            try {
+                const res = await fetch('firewall_api.php?action=status');
+                const data = await res.json();
+                if (data.status === "success") {
+                    document.getElementById('fw_toggle').checked = data.enabled;
+                }
+            } catch (e) {
+                console.error("Error reading firewall status:", e);
+            }
+        }
+
+        // Handle the On/Off button click
+        async function toggleFirewall(cb) {
+            const action = cb.checked ? 'enable' : 'disable';
+            if(!confirm(`Are you sure you want to ${action.toUpperCase()} the firewall tracking?`)) {
+                cb.checked = !cb.checked; // Cancel the animation if the user declines
+                return;
+            }
+            
+            try {
+                const res = await fetch(`firewall_api.php?action=${action}`);
+                const data = await res.json();
+                if (data.status === "success") {
+                    fetchStats(); // Update dashboard data
+                } else {
+                    alert("Error: " + data.message);
+                    cb.checked = !cb.checked; // Revert state
+                }
+            } catch (e) {
+                alert("API communication error.");
+                cb.checked = !cb.checked; // Revert state
+            }
+        }
+		
+		// === LIVE ULOGD LOGIC ===
+        const fmtBytes = (b) => { if (!b) return "0 B"; const u = ['B','KB','MB','GB','TB']; let i = 0; while(b >= 1024 && i < u.length-1){ b/=1024; i++; } return b.toFixed(2) + ' ' + u[i]; };
+        let ulogdInterval = null;
+        let ulogdLoaded = false;
+
+        // Triggers only when the dropdown is opened
+        function toggleUlogd(detailsEl) {
+            if (detailsEl.open) {
+                fetchUlogd(); // Fetch immediately
+                ulogdInterval = setInterval(() => fetchUlogd(), 10000); // Then update every 10 seconds
+            } else {
+                clearInterval(ulogdInterval); // Stop updating if closed (saves CPU)
+            }
+        }
+
+        // Configure how many lines to fetch from the log
+        const LOG_LINES = 1000;
+
+        async function fetchUlogd(force = false, event = null) {
+            if (event) event.stopPropagation();
+            const viewer = document.getElementById('content_ulogd');
+            const sizeLabel = document.getElementById('size_ulogd');
+            
+            try {
+                // Request log data from the PHP API with the specified line limit
+                const response = await fetch(`firewall_api.php?action=livelog&lines=${LOG_LINES}&t=${Date.now()}`);
+                if (!response.ok) throw new Error("API Error");
+                
+                const data = await response.json();
+                
+                // Check if the user has scrolled up, to avoid snapping their view
+                const wasAtBottom = (viewer.scrollHeight - viewer.scrollTop <= viewer.clientHeight + 50);
+                
+                if (data.status === "error") {
+                    viewer.innerText = data.message;
+                    sizeLabel.innerText = "";
+                } else {
+                    viewer.innerText = data.log;
+                    sizeLabel.innerText = "(Live PCAP Decode - Last " + LOG_LINES + " lines)";
+                }
+                
+                // Auto-scroll to the bottom if the user is already at the bottom
+                if (!ulogdLoaded || force || wasAtBottom) {
+                    viewer.scrollTop = viewer.scrollHeight;
+                }
+                ulogdLoaded = true;
+            } catch (err) {
+                viewer.innerText = "API connection error or PCAP unavailable.";
+                sizeLabel.innerText = "";
+            }
+        }
+
+        function downloadUlogd(event) {
+            event.stopPropagation();
+            const content = document.getElementById('content_ulogd').innerText;
+            if (!content || content.startsWith("Click") || content.startsWith("Log file")) { alert("Load log first."); return; }
+            const url = window.URL.createObjectURL(new Blob([content], { type: 'text/plain' }));
+            const a = document.createElement('a'); a.href = url;
+            a.download = "ulogd_" + new Date().toISOString().slice(0,10) + ".log";
+            a.click(); window.URL.revokeObjectURL(url);
+        }		
     </script>
 </body>
 </html>
