@@ -1,22 +1,28 @@
 #!/bin/sh
 
 # ==============================================================================
-# KEENETIC FIREWALL STATS v3.6.3 (GEO-IP INTEGRATION)
+# KEENETIC FIREWALL STATS v3.7.0 (INTERACTIVE DASHBOARD)
 # ==============================================================================
 # AUTHOR: mattheweli
 # DESCRIPTION: 
 #   Aggregates firewall statistics, parses sniffer data for port mapping,
 #   and generates JSON data for the web dashboard.
 #
+#     - NEW [v3.7.0]: Integrated Interactive PHP Backend API (firewall_api.php).
+#     - NEW [v3.7.0]: Added Frontend support for real-time IP Lookup, Ban, and Unban.
+#     - NEW [v3.7.0]: Added Manual Blocklists (Blacklist/Blacklist6) tracking and persistence.
+#     - NEW [v3.7.0]: Injected "Quick Unban" action links directly into report tables.
+#     - CRITICAL FIX [v3.7.0]: Sniffer parser incorrectly treating ICMPv6 IPs as ports.
+#     - FIX [v3.7.0]: Silenced SQLite PRAGMA console output (wal/5000).
 #     - NEW: Anti-Loop API logic (prevents wasting AbuseIPDB credits).
 #     - NEW: Private/LAN IP filtering for Geo-enrichment.
 #     - NEW: Version 3.6.3 includes previous DB maintenance (Orphan/VACUUM).
-#     - FIX: IPv6 regex counting fixed for lists
-#     - FIX: Database creation and optimization on first boot
-#     - FIX: Send report minor cosmetic changes 
-#     - CRITICAL FIX: ulogd PCAP rotation file
+#     - FIX: IPv6 regex counting fixed for lists.
+#     - FIX: Database creation and optimization on first boot.
+#     - FIX: Send report minor cosmetic changes. 
+#     - CRITICAL FIX: ulogd PCAP rotation file.
 #     - OPT: Limited tooltip port list in JS to max 20 entries to reduce file size.
-#     - LOGIC: Honeypot tables now strictly enforce TCP/UDP protocol matching
+#     - LOGIC: Honeypot tables now strictly enforce TCP/UDP protocol matching.
 #     - CORE: Implemented robust "Linux Cooked" (SLL) header parsing for tcpdump.
 # ==============================================================================
 
@@ -39,6 +45,11 @@ fi
 
 # Database and File Paths
 DB_FILE="/opt/etc/firewall_stats.db"
+BACKUP_FILE_V4="/opt/etc/firewall_blocklist.save"
+BACKUP_FILE_V6="/opt/etc/firewall_blocklist6.save"
+BACKUP_GEO_V4="/opt/etc/firewall_geoblock.save"
+BACKUP_MANUAL_V4="/opt/etc/Blacklist.backup"
+BACKUP_MANUAL_V6="/opt/etc/Blacklist6.backup"
 WEB_DIR="/opt/var/www/firewall"
 LIST_DIR="$WEB_DIR/lists"
 DATA_FILE="$WEB_DIR/firewall_data.js"
@@ -59,11 +70,9 @@ TRAP_SQL_LIST=$(echo "$ALL_TRAP_PORTS" | tr -s ' ' ',' | sed 's/^,//;s/,$//')
 # Define Firewall Targets (IPv4/IPv6)
 IPTABLES_CMD="iptables"; IP6TABLES_CMD="ip6tables"
 if [ "$ENABLE_IPV6" = "true" ]; then
-    # Added GeoBlock and GeoBlock6 to the tracking targets
-    TARGETS="FirewallBlock|$IPTABLES_CMD| FirewallBlock6|$IP6TABLES_CMD|6 VPNBlock|$IPTABLES_CMD| GeoBlock|$IPTABLES_CMD| GeoBlock6|$IP6TABLES_CMD|6"
+    TARGETS="FirewallBlock|$IPTABLES_CMD| FirewallBlock6|$IP6TABLES_CMD|6 VPNBlock|$IPTABLES_CMD| GeoBlock|$IPTABLES_CMD| GeoBlock6|$IP6TABLES_CMD|6 Blacklist|$IPTABLES_CMD| Blacklist6|$IP6TABLES_CMD|6"
 else
-    # Added GeoBlock to the tracking targets (IPv4 only)
-    TARGETS="FirewallBlock|$IPTABLES_CMD| VPNBlock|$IPTABLES_CMD| GeoBlock|$IPTABLES_CMD|"
+    TARGETS="FirewallBlock|$IPTABLES_CMD| VPNBlock|$IPTABLES_CMD| GeoBlock|$IPTABLES_CMD| Blacklist|$IPTABLES_CMD|"
 fi
 
 # ==============================================================================
@@ -85,6 +94,12 @@ DIFF_FILE_GEO6="/opt/etc/firewall_geo6_diff.dat"
 GEO6_SIZE_FILE="/opt/etc/firewall_geo6_last_size.dat"
 IP_LAST_STATE="/opt/etc/firewall_ip_counters.dat"
 
+#Manual State files
+DIFF_FILE_MANUAL="/opt/etc/firewall_manual_diff.dat"
+MANUAL_SIZE_FILE="/opt/etc/firewall_manual_last_size.dat"
+DIFF_FILE_MANUAL6="/opt/etc/firewall_manual6_diff.dat"
+MANUAL6_SIZE_FILE="/opt/etc/firewall_manual6_last_size.dat"
+
 # Load AbuseIPDB Key
 KEY_FILE="/opt/etc/AbuseIPDB.key"
 if [ -s "$KEY_FILE" ]; then ABUSEIPDB_KEY=$(cat "$KEY_FILE" | tr -d '[:space:]'); else ABUSEIPDB_KEY=""; fi 
@@ -99,16 +114,16 @@ DATE_CMD="/opt/bin/date"; [ ! -x "$DATE_CMD" ] && DATE_CMD="date"
 NOW=$($DATE_CMD +%s)
 
 # Initialize counters for logging (Added NEW_DROPS_GEO and GEO6)
-NEW_DROPS_V4=0; NEW_DROPS_V6=0; NEW_DROPS_VPN=0; NEW_DROPS_TRAP=0; NEW_DROPS_TRAP6=0; NEW_DROPS_GEO=0; NEW_DROPS_GEO6=0
+NEW_DROPS_V4=0; NEW_DROPS_V6=0; NEW_DROPS_VPN=0; NEW_DROPS_TRAP=0; NEW_DROPS_TRAP6=0; NEW_DROPS_GEO=0; NEW_DROPS_GEO6=0; NEW_DROPS_MANUAL=0; NEW_DROPS_MANUAL6=0
 NEW_IP_RECORDS=0
 
-echo "=== Firewall Stats Updater v3.6.3 ==="
+echo "=== Firewall Stats Updater v3.7.0 ==="
 
 # ==============================================================================
 # 3. DATABASE INITIALIZATION & TUNING
 # ==============================================================================
 # Enable high-performance SQLite optimizations (WAL mode, memory temp store)
-sqlite3 "$DB_FILE" "PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA temp_store = MEMORY;"
+sqlite3 "$DB_FILE" "PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA temp_store = MEMORY; PRAGMA cache_size = -4000; PRAGMA busy_timeout = 5000;" >/dev/null
 
 # Verify if the DB has the correct structure (not just if the file exists)
 HAS_DROPS=$(sqlite3 "$DB_FILE" "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='drops';" 2>/dev/null)
@@ -158,6 +173,12 @@ else
         echo " -> Migrating DB: Adding performance index idx_port..."
         sqlite3 "$DB_FILE" "CREATE INDEX IF NOT EXISTS idx_port ON ip_info(target_port);"
     fi
+	
+	HAS_COMPOSITE=$(sqlite3 "$DB_FILE" "PRAGMA index_list('ip_drops');" | grep "idx_list_ts_ip")
+    if [ -z "$HAS_COMPOSITE" ]; then
+        echo " -> Migrating DB: Adding composite index idx_list_ts_ip..."
+        sqlite3 "$DB_FILE" "CREATE INDEX IF NOT EXISTS idx_list_ts_ip ON ip_drops(list_type, timestamp, ip);"
+    fi
 fi
 
 # ==============================================================================
@@ -193,6 +214,9 @@ for TARGET in $TARGETS; do
         # Capture GeoIP drops
         [ "$SET_NAME" = "GeoBlock" ] && NEW_DROPS_GEO=$DELTA
         [ "$SET_NAME" = "GeoBlock6" ] && NEW_DROPS_GEO6=$DELTA
+		# Capture Manual drops
+        [ "$SET_NAME" = "Blacklist" ] && NEW_DROPS_MANUAL=$DELTA
+        [ "$SET_NAME" = "Blacklist6" ] && NEW_DROPS_MANUAL6=$DELTA
     fi
     echo "$CUR" > "$LAST_RUN_FILE"
     
@@ -267,6 +291,10 @@ DIFF_TRAP6=$(calc_diff "$SIZE_AutoBan6" "$TRAP6_SIZE_FILE" "$DIFF_FILE_TRAP6")
 DIFF_GEO=$(read_file "$DIFF_FILE_GEO")
 if [ "$ENABLE_IPV6" = "true" ]; then DIFF_GEO6=$(read_file "$DIFF_FILE_GEO6"); else DIFF_GEO6="=0"; fi
 
+#Calculate diffs for Manual Blocklists
+DIFF_MANUAL=$(calc_diff "$SIZE_Blacklist" "$MANUAL_SIZE_FILE" "$DIFF_FILE_MANUAL")
+DIFF_MANUAL6=$(calc_diff "$SIZE_Blacklist6" "$MANUAL6_SIZE_FILE" "$DIFF_FILE_MANUAL6")
+
 # ==============================================================================
 # 7. IP PACKET PROCESSING (PER-IP HITS)
 # ==============================================================================
@@ -282,11 +310,15 @@ SQL_IMPORT="/tmp/ip_inserts.sql"
     ipset list AutoBan 2>/dev/null | grep -E '^[0-9]{1,3}\.' | sed -n 's/^\([^ ]*\) .*packets \([0-9]*\) .*/\1 \2 trap/p' | awk '$2 > 0'
     # Extract GeoIP packets and tag them as 'geo'
     ipset list GeoBlock 2>/dev/null | grep "packets" | sed -n 's/^\([^ ]*\) .*packets \([0-9]*\) .*/\1 \2 geo/p' | awk '$2 > 0'
+	# Dump Manual IPv4
+    ipset list Blacklist 2>/dev/null | grep "packets" | sed -n 's/^\([^ ]*\) .*packets \([0-9]*\) .*/\1 \2 manual/p' | awk '$2 > 0'
     if [ "$ENABLE_IPV6" = "true" ]; then
         ipset list FirewallBlock6 2>/dev/null | grep "packets" | sed -n 's/^\([^ ]*\) .*packets \([0-9]*\) .*/\1 \2 main/p' | awk '$2 > 0'
         ipset list AutoBan6 2>/dev/null | grep -E ':' | sed -n 's/^\([^ ]*\) .*packets \([0-9]*\) .*/\1 \2 trap/p' | awk '$2 > 0'
         # Extract GeoBlock6 packets
         ipset list GeoBlock6 2>/dev/null | grep "packets" | sed -n 's/^\([^ ]*\) .*packets \([0-9]*\) .*/\1 \2 geo/p' | awk '$2 > 0'
+		# Dump Manual IPv6
+        ipset list Blacklist6 2>/dev/null | grep "packets" | sed -n 's/^\([^ ]*\) .*packets \([0-9]*\) .*/\1 \2 manual/p' | awk '$2 > 0'
     fi
 } | sort > "$CURRENT_DUMP"
 
@@ -344,16 +376,22 @@ if [ -n "$LOG_BUFFER" ] && [ -s "$LOG_BUFFER" ]; then
             src_full = $(arrow_idx-1);
             dst_full = $(arrow_idx+1);
             
-            # Extract IP
-            n = split(src_full, a, ".");
-            if (n >= 5) ip = a[1]"."a[2]"."a[3]"."a[4];
-            else if (n == 2) { ip = src_full; sub(/\.[^.]*$/, "", ip); }
-            else { ip = src_full; if (src_full ~ /\.[0-9]+$/) sub(/\.[^.]*$/, "", ip); }
+            # Extract Source IP safely (Fix for both IPv4 and IPv6)
+            src_clean = src_full;
+            gsub(/:$/, "", src_clean);
+            n = split(src_clean, a, ".");
+            if (n >= 4) ip = a[1]"."a[2]"."a[3]"."a[4];
+            else ip = a[1];
 
-            # Extract Port
-            m = split(dst_full, b, ".");
-            port_str = b[m];
-            gsub(":", "", port_str);
+            # Extract Destination Port safely (Prevents IPv6 acting as port)
+            dst_clean = dst_full;
+            gsub(/:$/, "", dst_clean);
+            m = split(dst_clean, b, ".");
+            if (m == 5 || m == 2) port_str = b[m];
+            else port_str = 0;
+            
+            gsub(/[^0-9]/, "", port_str); # Assicura che sia solo numerico
+            if (port_str == "") port_str = 0;
 
             # Extract Proto
             proto = "udp"; 
@@ -421,7 +459,9 @@ if [ -n "$LOG_BUFFER" ] && [ -s "$LOG_BUFFER" ]; then
                 }
                 
                 if (is_modified) {
-                    printf "UPDATE ip_info SET target_port=%s, port_history=\047%s\047, updated=%d WHERE ip=\047%s\047;\n", last_port, final_hist, now, db_ip;
+                    if (last_port !~ /^[0-9]+$/) { last_port = 0; }
+                    
+                    printf "UPDATE ip_info SET target_port=%d, port_history=\047%s\047, updated=%d WHERE ip=\047%s\047;\n", last_port, final_hist, now, db_ip;
                     updates++
                 }
             }
@@ -498,9 +538,9 @@ get_ip_table() {
     sqlite3 -separator "|" "$DB_FILE" "$QUERY" | while IFS='|' read -r IP COUNT CO SC DO PORT TYPE PHIST; do
         CLEAN_IP=$(echo "$IP" | cut -d'/' -f1)
         if [ -z "$CO" ] && [ -n "$ABUSEIPDB_KEY" ]; then
-            # 1. Lifesaver filter: ignore private and Multicast IPs
-            if echo "$CLEAN_IP" | grep -qE '^(192\.168|10\.|172\.(1[6-9]|2[0-9]|3[0-1])|127\.|255\.|224\.|::1|fe80:)'; then
-                CO="LAN"; SC=0; DO="Local/Private"
+            # 1. Lifesaver filter: ignore private, loopback, and Multicast IPs
+            if echo "$CLEAN_IP" | grep -qE '^(192\.168|10\.|172\.(1[6-9]|2[0-9]|3[0-1])|127\.|0\.|255\.|224\.|::1|fe80:)'; then
+                CO="LAN"; SC=0; DO="Local/Private/Spoofed"
             
             # 2. Anti-Churn filter: ignore IPs with fewer than 5 hits (prevents background noise from draining API)
             elif [ "$COUNT" -lt 5 ]; then
@@ -564,7 +604,7 @@ get_ip_table() {
         elif [ -n "$PORT" ] && [ "$PORT" != "0" ]; then
             PORT_HTML="<span class='list-badge' style='${STYLE_TCP}'>:$PORT</span>"
         fi
-        echo "<tr><td><span class='badge bg-danger'>$COUNT</span></td><td><a href='https://www.abuseipdb.com/check/$CLEAN_IP' target='_blank'>$IP</a> $BADGE_HTML <br> $PORT_HTML</td><td class='meta'><span style='$ST'>Risk: ${SC}%</span> - $CO<br><small>$DO</small></td></tr>"
+       echo "<tr><td><span class='badge bg-danger'>$COUNT</span></td><td><a href='https://www.abuseipdb.com/check/$CLEAN_IP' target='_blank'>$IP</a> $BADGE_HTML <a href='#' onclick='unbanIP(\"$CLEAN_IP\"); return false;' title='Quick Unban' style='font-size: 14px; margin-left: 5px; text-decoration: none;'>🔓</a><br> $PORT_HTML</td><td class='meta'><span style='$ST'>Risk: ${SC}%</span> - $CO<br><small>$DO</small></td></tr>"
     done
 }
 
@@ -713,16 +753,27 @@ DAYS=$((UP_SECONDS / 86400)); HOURS=$(( (UP_SECONDS % 86400) / 3600 ))
 UPTIME="${DAYS}d ${HOURS}h"
 S_MAIN=${SIZE_FirewallBlock:-0}; S_MAIN6=${SIZE_FirewallBlock6:-0}; S_VPN=${SIZE_VPNBlock:-0}; S_TRAP=${SIZE_AutoBan:-0}; S_TRAP6=${SIZE_AutoBan6:-0}; S_GEO=${SIZE_GeoBlock:-0}; S_GEO6=${SIZE_GeoBlock6:-0}
 
+# Get file modification times for blocklists
+[ -f "$BACKUP_FILE_V4" ] && TIME_MAIN=$($DATE_CMD -r "$BACKUP_FILE_V4" "+%d-%m-%Y %H:%M:%S" 2>/dev/null) || TIME_MAIN="$DATE_UPDATE"
+[ -f "$BACKUP_FILE_V6" ] && TIME_V6=$($DATE_CMD -r "$BACKUP_FILE_V6" "+%d-%m-%Y %H:%M:%S" 2>/dev/null) || TIME_V6="$DATE_UPDATE"
+[ -f "$BACKUP_GEO_V4" ] && TIME_GEO=$($DATE_CMD -r "$BACKUP_GEO_V4" "+%d-%m-%Y %H:%M:%S" 2>/dev/null) || TIME_GEO="$DATE_UPDATE"
+[ -f "$BACKUP_MANUAL_V4" ] && TIME_MANUAL=$($DATE_CMD -r "$BACKUP_MANUAL_V4" "+%d-%m-%Y %H:%M:%S" 2>/dev/null) || TIME_MANUAL="$DATE_UPDATE"
+
 # Assemble JS File (Atomic Write to Temp File first)
 cat <<EOF > "$TEMP_DATA_FILE"
 window.FW_DATA = {
     updated: "$DATE_UPDATE", uptime: "$UPTIME", lifetime: "$TOTAL_DROPS_ALL_TIME",
     ipv6_status: "$ENABLE_IPV6",
     lists: { 
-        main: "$S_MAIN", diff_v4: "$DIFF_V4", main6: "$S_MAIN6", diff_v6: "$DIFF_V6", 
-        vpn: "$S_VPN", diff_vpn: "$DIFF_VPN", trap_ips: "$S_TRAP", diff_trap: "$DIFF_TRAP",
-        trap6_ips: "$S_TRAP6", diff_trap6: "$DIFF_TRAP6", geo: "$S_GEO", diff_geo: "$DIFF_GEO",
-        geo6: "$S_GEO6", diff_geo6: "$DIFF_GEO6"
+      main: "$S_MAIN", diff_v4: "$DIFF_V4", up_main: "$TIME_MAIN",
+      main6: "$S_MAIN6", diff_v6: "$DIFF_V6", up_v6: "$TIME_V6",
+      manual: "$S_MANUAL", diff_manual: "$DIFF_MANUAL", up_manual: "$TIME_MANUAL",
+      manual6: "$S_MANUAL6", diff_manual6: "$DIFF_MANUAL6",
+      vpn: "$S_VPN", diff_vpn: "$DIFF_VPN", up_vpn: "$TIME_MAIN",
+      trap_ips: "$S_TRAP", diff_trap: "$DIFF_TRAP", up_trap: "$DATE_UPDATE",
+      trap6_ips: "$S_TRAP6", diff_trap6: "$DIFF_TRAP6",
+      geo: "$S_GEO", diff_geo: "$DIFF_GEO", up_geo: "$TIME_GEO",
+      geo6: "$S_GEO6", diff_geo6: "$DIFF_GEO6"
     },
     averages: { hourly: "$AVG_H", daily: "$AVG_D", monthly: "$AVG_M", yearly: "$AVG_Y" },
     tables: { 
@@ -744,14 +795,15 @@ chmod 644 "$DATA_FILE"
 # ==============================================================================
 echo " -> Smart Database Lossless Compression..."
 
-# Definisci le soglie temporali (Protegge rigorosamente le ultime 24 ore per i grafici orari!)
 YESTERDAY=$((NOW - 86400))
 THIRTY_DAYS=$((NOW - 2592000))
+FORTY_FIVE_DAYS=$((NOW - 3888000))
+ONE_YEAR=$((NOW - 31536000))
 
 sqlite3 "$DB_FILE" "
 BEGIN TRANSACTION;
 
--- 1. ROLLUP GLOBAL DROPS (Ad Infinitum compression)
+-- 1. ROLLUP GLOBAL DROPS (Preserve aggregate history indefinitely)
 CREATE TEMP TABLE IF NOT EXISTS drops_rollup AS 
     SELECT ((timestamp / 86400) * 86400) + 43200 AS day_ts, list_name, SUM(count) AS total_count 
     FROM drops 
@@ -762,7 +814,7 @@ INSERT INTO drops (timestamp, list_name, count)
     SELECT day_ts, list_name, total_count FROM drops_rollup;
 DROP TABLE drops_rollup;
 
--- 2. ROLLUP IP DROPS (Preserve dashboard 1y/All-Time data)
+-- 2. ROLLUP IP DROPS (Aggregate historical IP data to prevent loss)
 CREATE TEMP TABLE IF NOT EXISTS ip_drops_rollup AS 
     SELECT ((timestamp / 86400) * 86400) + 43200 AS day_ts, ip, SUM(count) AS total_count, list_type 
     FROM ip_drops 
@@ -773,18 +825,33 @@ INSERT INTO ip_drops (timestamp, ip, count, list_type)
     SELECT day_ts, ip, total_count, list_type FROM ip_drops_rollup;
 DROP TABLE ip_drops_rollup;
 
--- 3. NOISE REDUCTION (Aggressive Garbage Collection)
--- Rimuove dal database gli IP 'fantasma' più vecchi di 30 giorni (Soglia alzata a 5)
+-- 3. VIP LIST CREATION (Save top IPs in RAM)
+CREATE TEMP TABLE keep_ips (ip TEXT UNIQUE);
+INSERT OR IGNORE INTO keep_ips (ip) 
+SELECT ip FROM (SELECT ip FROM ip_drops GROUP BY ip ORDER BY SUM(count) DESC LIMIT 15);
+INSERT OR IGNORE INTO keep_ips (ip) 
+SELECT ip FROM (SELECT ip FROM ip_drops WHERE timestamp >= $ONE_YEAR GROUP BY ip ORDER BY SUM(count) DESC LIMIT 15);
+INSERT OR IGNORE INTO keep_ips (ip) 
+SELECT ip FROM (SELECT ip FROM ip_drops WHERE timestamp >= $THIRTY_DAYS GROUP BY ip ORDER BY SUM(count) DESC LIMIT 15);
+
+-- 4. SELECTIVE DELETION AND CLEANUP (Replaces old sections 3 and 4)
+-- Remove ghost IPs older than 30 days and useless IP details older than 45 days (excluding VIPs)
 DELETE FROM ip_drops WHERE timestamp < $THIRTY_DAYS AND count <= 5;
+DELETE FROM ip_drops WHERE timestamp < $FORTY_FIVE_DAYS AND ip NOT IN (SELECT ip FROM keep_ips);
 
--- 4. ORPHAN CLEANUP (Pulisce i metadati pesanti)
--- Elimina nazione, dominio e porte per gli IP che non hanno più log attivi
-DELETE FROM ip_info WHERE ip NOT IN (SELECT DISTINCT CASE WHEN INSTR(ip, '/') > 0 THEN SUBSTR(ip, 1, INSTR(ip, '/') - 1) ELSE ip END FROM ip_drops);
+-- NEW: Pruning ip_info (Metadati)
+-- This is crucial: if an IP is no longer in ip_drops, its metadata is useless.
+-- We delete rows from ip_info for IPs that are no longer referenced in ip_drops.
+DELETE FROM ip_info 
+WHERE ip NOT IN (
+    SELECT DISTINCT CASE WHEN INSTR(ip, '/') > 0 THEN SUBSTR(ip, 1, INSTR(ip, '/') - 1) ELSE ip END 
+    FROM ip_drops
+);
 
+DROP TABLE keep_ips;
 COMMIT;
 
 -- 5. RECLAIM DISK SPACE
--- Deframmenta e rimpicciolisce fisicamente il file su disco
 VACUUM;
 "
 
@@ -887,6 +954,10 @@ send_report() {
         DATE_FROM=$(date -d "@$START_TIME" "+%d/%m %H:%M")
     fi
     DATE_TO=$(date "+%d/%m %H:%M")
+	# Get file modification times for blocklists
+	#[ -f "$BACKUP_FILE_V4" ] && TIME_MAIN=$(date -r "$BACKUP_FILE_V4" "+%d-%m-%Y %H:%M:%S" 2>/dev/null) || TIME_MAIN="$UPDATED"
+	#[ -f "$BACKUP_FILE_V6" ] && TIME_V6=$(date -r "$BACKUP_FILE_V6" "+%d-%m-%Y %H:%M:%S" 2>/dev/null) || TIME_V6="$UPDATED"
+	#[ -f "$BACKUP_GEO_V4" ] && TIME_GEO=$(date -r "$BACKUP_GEO_V4" "+%d-%m-%Y %H:%M:%S" 2>/dev/null) || TIME_GEO="$UPDATED"
 
     # 5. Construct Email Body (Added GeoIP Blocks line)
     MSG="Firewall $PERIOD_LABEL Report
