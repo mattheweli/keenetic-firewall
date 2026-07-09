@@ -1,9 +1,12 @@
 #!/bin/sh
 
 # ==============================================================================
-# KEENETIC FIREWALL HOOK v2.8.2 (MASTER SWITCH)
+# KEENETIC FIREWALL HOOK v2.9.0 (MASTER SWITCH & MANUAL BLACKLISTS)
 # Description: Dual-Stack Firewall with Auto-Ban, Connlimit & Port Logging.
 # Features:
+#   - NEW [v2.9.0]: Interactive Manual Blocklists (Blacklist/Blacklist6) via Dashboard.
+#   - NEW [v2.9.0]: Instant persistence and restore for Manual Blocklists.
+#   - NEW [v2.9.0]: RAM cleanup (flush & destroy) for Manual Blocklists on Switch OFF.
 #   - NEW: Restore GeoIP lists from disk if backup files exist
 #   - NEW: Global Kill Switch (ENABLE_FIREWALL) to flush and disable all rules.
 #   - NEW: GeoIP Blocking integration (Kernel-level drops for banned countries).
@@ -90,10 +93,14 @@ fi
 IPSET_MAIN="FirewallBlock"; IPSET_MAIN6="FirewallBlock6"
 IPSET_VPN="VPNBlock"
 IPSET_AUTOBAN="AutoBan"; IPSET_AUTOBAN6="AutoBan6"
+IPSET_BLACKLIST="Blacklist"
+IPSET_BLACKLIST6="Blacklist6"
 IPSET_WHITE="FirewallWhite"; IPSET_WHITE6="FirewallWhite6"
 
 VPN_BANNED_FILE="/opt/etc/vpn_banned_ips.txt"
 AUTOBAN_SAVE_FILE="/opt/etc/firewall_autoban.save"
+BACKUP_BLACKLIST="/opt/etc/Blacklist.backup"
+BACKUP_BLACKLIST6="/opt/etc/Blacklist6.backup"
 MAX_ELEM_V4=524288; MAX_ELEM_V6=65536
 
 # --- HELPER: CONVERT SPACE TO COMMA (ROBUST) ---
@@ -127,6 +134,10 @@ BYPASS_BRUTE_UDP_CSV=$(to_csv "$BYPASS_BRUTE_UDP")
         ip6tables -F BLOCKLIST_IN6 2>/dev/null; ip6tables -X BLOCKLIST_IN6 2>/dev/null
         ip6tables -F BLOCKLIST_FWD6 2>/dev/null; ip6tables -X BLOCKLIST_FWD6 2>/dev/null
         ip6tables -F SCAN_TRAP6 2>/dev/null; ip6tables -X SCAN_TRAP6 2>/dev/null
+		
+		# --- NEW: Clean up Manual Blacklists from RAM ---
+        ipset flush "$IPSET_BLACKLIST" 2>/dev/null; ipset destroy "$IPSET_BLACKLIST" 2>/dev/null
+        ipset flush "$IPSET_BLACKLIST6" 2>/dev/null; ipset destroy "$IPSET_BLACKLIST6" 2>/dev/null
         
         exit 0
     fi
@@ -216,6 +227,34 @@ if [ "$ENABLE_IPV6" = "true" ]; then
     fi
 fi
 
+# IPv4 Manual Blacklist (Persistence)
+if ! ipset list -n "$IPSET_BLACKLIST" >/dev/null 2>&1; then
+    # 1. Try restoring from file
+    if [ -f "$BACKUP_BLACKLIST" ]; then
+        ipset restore -! < "$BACKUP_BLACKLIST" 2>/dev/null
+    fi
+    
+    # 2. If restore failed or set still missing, create fresh
+    if ! ipset list -n "$IPSET_BLACKLIST" >/dev/null 2>&1; then
+        ipset create "$IPSET_BLACKLIST" hash:ip maxelem $MAX_ELEM_V4 counters -exist
+    fi
+fi
+
+# IPv6 Manual Blacklist (Persistence)
+if [ "$ENABLE_IPV6" = "true" ]; then
+    if ! ipset list -n "$IPSET_BLACKLIST6" >/dev/null 2>&1; then
+        # 1. Try restoring from file
+        if [ -f "$BACKUP_BLACKLIST6" ]; then
+            ipset restore -! < "$BACKUP_BLACKLIST6" 2>/dev/null
+        fi
+
+        # 2. If still missing, create fresh
+        if ! ipset list -n "$IPSET_BLACKLIST6" >/dev/null 2>&1; then
+            ipset create "$IPSET_BLACKLIST6" hash:ip family inet6 maxelem $MAX_ELEM_V6 counters -exist
+        fi
+    fi
+fi
+
 # ==============================================================================
 # SECTION A: IPv4 LOGIC
 # ==============================================================================
@@ -223,6 +262,7 @@ fi
 iptables -N BLOCKLIST_IN 2>/dev/null; iptables -F BLOCKLIST_IN
 iptables -N BLOCKLIST_FWD 2>/dev/null; iptables -F BLOCKLIST_FWD
 iptables -N SCAN_TRAP 2>/dev/null;     iptables -F SCAN_TRAP
+iptables -N BLACKLIST 2>/dev/null;     iptables -F BLACKLIST
 
 # Sub-chains for granular checks
 iptables -N FW_CHK_CONN 2>/dev/null;   iptables -F FW_CHK_CONN
@@ -275,6 +315,14 @@ if [ "$ENABLE_AUTOBAN" = "true" ] && ipset list -n "$IPSET_AUTOBAN" >/dev/null 2
     iptables -A BLOCKLIST_FWD -m set --match-set "$IPSET_AUTOBAN" src -j DROP
 fi
 
+# Manual Blacklist IPv4
+if [ "$ENABLE_MANUAL" = "true" ] && ipset list -n "$IPSET_BLACKLIST" >/dev/null 2>&1; then
+    iptables -A BLOCKLIST_IN -m set --match-set "$IPSET_BLACKLIST" src -j NFLOG --nflog-group 1 --nflog-range 128 --nflog-prefix "FW_DROP"
+    iptables -A BLOCKLIST_IN -m set --match-set "$IPSET_BLACKLIST" src -j DROP
+    iptables -A BLOCKLIST_FWD -m set --match-set "$IPSET_BLACKLIST" src -j NFLOG --nflog-group 1 --nflog-range 128 --nflog-prefix "FW_DROP"
+    iptables -A BLOCKLIST_FWD -m set --match-set "$IPSET_BLACKLIST" src -j DROP
+fi
+
 # --- THE HONEYPOT TRAP (SCAN_TRAP) ---
 
 # 1. Safety & DNS Fix
@@ -283,6 +331,9 @@ iptables -A SCAN_TRAP -i tun+ -j RETURN
 iptables -A SCAN_TRAP -p icmp -j RETURN
 iptables -A SCAN_TRAP -d 255.255.255.255 -j RETURN
 iptables -A SCAN_TRAP -d 224.0.0.0/4 -j RETURN
+iptables -A SCAN_TRAP -s 127.0.0.0/8 -j DROP
+iptables -A SCAN_TRAP -s 224.0.0.0/3 -j DROP
+iptables -A SCAN_TRAP -s 255.255.255.255 -j DROP
 iptables -A SCAN_TRAP -p udp -m multiport --sports 53,853 -j RETURN
 iptables -A SCAN_TRAP -p tcp -m multiport --sports 53,853 -j RETURN
 
@@ -376,6 +427,7 @@ iptables -A SCAN_TRAP -j DROP
 
 # --- LINK CHAINS ---
 iptables -A BLOCKLIST_IN -j SCAN_TRAP
+iptables -A BLOCKLIST_IN -j BLACKLIST
 
 # CONDITIONAL FWD PROTECTION
 if [ "$ENABLE_FWD_PROTECTION" = "true" ]; then
@@ -396,6 +448,7 @@ if [ "$ENABLE_IPV6" = "true" ]; then
     ip6tables -N BLOCKLIST_IN6 2>/dev/null; ip6tables -F BLOCKLIST_IN6
     ip6tables -N BLOCKLIST_FWD6 2>/dev/null; ip6tables -F BLOCKLIST_FWD6
     ip6tables -N SCAN_TRAP6 2>/dev/null;     ip6tables -F SCAN_TRAP6
+	ip6tables -N BLACKLIST6 2>/dev/null;    ip6tables -F BLACKLIST6
     
     # Sub-chains for granular checks
     ip6tables -N FW_CHK_CONN6 2>/dev/null;   ip6tables -F FW_CHK_CONN6
@@ -437,6 +490,14 @@ if [ "$ENABLE_IPV6" = "true" ]; then
         ip6tables -A BLOCKLIST_IN6 -m set --match-set "$IPSET_AUTOBAN6" src -j DROP
         ip6tables -A BLOCKLIST_FWD6 -m set --match-set "$IPSET_AUTOBAN6" src -j NFLOG --nflog-group 1 --nflog-range 128 --nflog-prefix "FW_DROP6"
         ip6tables -A BLOCKLIST_FWD6 -m set --match-set "$IPSET_AUTOBAN6" src -j DROP
+    fi
+	
+	# Manual Blacklist IPv6
+    if [ "$ENABLE_MANUAL" = "true" ] && ipset list -n "$IPSET_BLACKLIST6" >/dev/null 2>&1; then
+        ip6tables -A BLOCKLIST_IN6 -m set --match-set "$IPSET_BLACKLIST6" src -j NFLOG --nflog-group 1 --nflog-range 128 --nflog-prefix "FW_DROP6"
+        ip6tables -A BLOCKLIST_IN6 -m set --match-set "$IPSET_BLACKLIST6" src -j DROP
+        ip6tables -A BLOCKLIST_FWD6 -m set --match-set "$IPSET_BLACKLIST6" src -j NFLOG --nflog-group 1 --nflog-range 128 --nflog-prefix "FW_DROP6"
+        ip6tables -A BLOCKLIST_FWD6 -m set --match-set "$IPSET_BLACKLIST6" src -j DROP
     fi
 
     # Trap Logic
@@ -518,6 +579,7 @@ if [ "$ENABLE_IPV6" = "true" ]; then
 
     # Links
     ip6tables -A BLOCKLIST_IN6 -j SCAN_TRAP6
+	ip6tables -A BLOCKLIST_IN6 -j BLACKLIST6
     
     # CONDITIONAL FWD PROTECTION (IPv6)
     if [ "$ENABLE_FWD_PROTECTION" = "true" ]; then
