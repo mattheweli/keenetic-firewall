@@ -1,8 +1,11 @@
 #!/bin/sh
 
 # ==============================================================================
-# KEENETIC FIREWALL MANAGER v2.6.2 (MASTER SWITCH)
+# KEENETIC FIREWALL MANAGER v2.7.0 (MASTER SWITCH)
 # Changelog:
+#   - NEW: Added support for Manual Blocklists (Blacklist/Blacklist6).
+#   - NEW: Manual Blocklists added to Diagnostics (Active/IP Count).
+#   - NEW: Dedicated Flush option for Manual Blocklists (clears RAM & Backups).
 #   - NEW: Master Kill Switch to globally enable/disable the entire firewall.
 #   - UX: Added visual warning on Main Menu if Firewall is globally disabled.
 #   - NEW: Automatic Interface Wizard to select VPN tunnels for updates.
@@ -33,6 +36,8 @@ SCRIPT_HOOK="/opt/etc/ndm/netfilter.d/100-firewall.sh"
 CONF_FILE="/opt/etc/firewall.conf"
 WHITELIST_FILE="/opt/etc/firewall_whitelist.txt"
 KEY_FILE="/opt/etc/AbuseIPDB.key"
+BACKUP_MANUAL_V4="/opt/etc/Blacklist.backup"
+BACKUP_MANUAL_V6="/opt/etc/Blacklist6.backup"
 
 # --- DEFAULTS ---
 DEF_ENABLE_FW="true"
@@ -52,6 +57,8 @@ DEF_REP_COOL="604800" # 7 Days
 # GeoIP Defaults
 DEF_BANNED_COUNTRIES=""
 
+DEF_ENABLE_MANUAL="true"
+
 # Default Blocklist URLs
 L4_DEFAULTS="https://iplists.firehol.org/files/firehol_level1.netset https://blocklist.greensnow.co/greensnow.txt http://cinsscore.com/list/ci-badguys.txt https://lists.blocklist.de/lists/all.txt https://raw.githubusercontent.com/borestad/blocklist-abuseipdb/main/abuseipdb-s100-30d.ipv4"
 L6_DEFAULTS="https://www.spamhaus.org/drop/dropv6.txt https://lists.blocklist.de/lists/all.txt"
@@ -68,7 +75,7 @@ BOLD='\033[1m'; DIM='\033[2m'
 show_header() {
     clear
     echo -e "${BLUE}=================================================${NC}"
-    echo -e "${BOLD}🛡️  KEENETIC FIREWALL MANAGER v2.6.2${NC}"
+    echo -e "${BOLD}🛡️  KEENETIC FIREWALL MANAGER v2.7.0${NC}"
     echo -e "${BLUE}=================================================${NC}"
 }
 
@@ -120,6 +127,7 @@ load_config() {
         echo "ENABLE_FWD_PROTECTION=\"$DEF_FWD_PROT\"" >> "$CONF_FILE"
         echo "ENABLE_AUTOBAN=\"$DEF_ENABLE_AUTOBAN\"" >> "$CONF_FILE"
         echo "ENABLE_BRUTEFORCE=\"$DEF_ENABLE_BF\"" >> "$CONF_FILE"
+		echo "ENABLE_MANUAL=\"$DEF_ENABLE_MANUAL\"" >> "$CONF_FILE"
         echo "ENABLE_CONNLIMIT=\"$DEF_ENABLE_CONN\"" >> "$CONF_FILE"
         echo "CONNLIMIT_MAX=\"$DEF_CONN_MAX\"" >> "$CONF_FILE"
         echo "BAN_TIMEOUT=\"$DEF_BAN_TIME\"" >> "$CONF_FILE"
@@ -141,7 +149,7 @@ load_config() {
         echo "REPORT_COOLDOWN=\"$DEF_REP_COOL\"" >> "$CONF_FILE"
         echo "UPDATE_INTERFACE=\"\"" >> "$CONF_FILE"
         
-		# GeoIP Configuration
+        # GeoIP Configuration
         echo "BANNED_COUNTRIES=\"$DEF_BANNED_COUNTRIES\"" >> "$CONF_FILE"
         echo "SOURCES_V4=\"$L4_DEFAULTS\"" >> "$CONF_FILE"
         echo "SOURCES_V6=\"$L6_DEFAULTS\"" >> "$CONF_FILE"
@@ -153,6 +161,7 @@ load_config() {
     : ${ENABLE_IPV6:=$DEF_IPV6}
     : ${ENABLE_FWD_PROTECTION:=$DEF_FWD_PROT}
     : ${ENABLE_AUTOBAN:=$DEF_ENABLE_AUTOBAN}
+	: ${ENABLE_MANUAL:=$DEF_ENABLE_MANUAL}
     : ${ENABLE_BRUTEFORCE:=$DEF_ENABLE_BF}
     : ${ENABLE_CONNLIMIT:=$DEF_ENABLE_CONN}
     : ${CONNLIMIT_MAX:=$DEF_CONN_MAX}
@@ -173,7 +182,7 @@ load_config() {
     : ${REPORT_COOLDOWN:=$DEF_REP_COOL}
     : ${UPDATE_INTERFACE:=""}
     
-	# GeoIP fallback
+    # GeoIP fallback
     : ${BANNED_COUNTRIES:=$DEF_BANNED_COUNTRIES}
     : ${SOURCES_V4:=$L4_DEFAULTS}
     : ${SOURCES_V6:=$L6_DEFAULTS}
@@ -187,6 +196,7 @@ save_config() {
     echo "ENABLE_FWD_PROTECTION=\"$ENABLE_FWD_PROTECTION\"" >> "$CONF_FILE"
     
     echo "ENABLE_AUTOBAN=\"$ENABLE_AUTOBAN\"" >> "$CONF_FILE"
+	echo "ENABLE_MANUAL=\"$ENABLE_MANUAL\"" >> "$CONF_FILE"
     echo "ENABLE_BRUTEFORCE=\"$ENABLE_BRUTEFORCE\"" >> "$CONF_FILE"
     echo "ENABLE_CONNLIMIT=\"$ENABLE_CONNLIMIT\"" >> "$CONF_FILE"
     echo "CONNLIMIT_MAX=\"$CONNLIMIT_MAX\"" >> "$CONF_FILE"
@@ -207,7 +217,7 @@ save_config() {
     echo "REPORT_COOLDOWN=\"$REPORT_COOLDOWN\"" >> "$CONF_FILE"
     echo "UPDATE_INTERFACE=\"$UPDATE_INTERFACE\"" >> "$CONF_FILE"
     
-	# Save GeoIP settings
+    # Save GeoIP settings
     echo "BANNED_COUNTRIES=\"$BANNED_COUNTRIES\"" >> "$CONF_FILE"
     echo "SOURCES_V4=\"$SOURCES_V4\"" >> "$CONF_FILE"
     echo "SOURCES_V6=\"$SOURCES_V6\"" >> "$CONF_FILE"
@@ -307,7 +317,6 @@ manage_port_list() {
                 sleep 1
                 ;;
             c|C)
-                # Svuota esplicitamente la variabile
                 eval "$VAR_NAME=\"\""
                 save_config
                 echo -e "${YELLOW}List cleared.${NC}"
@@ -659,6 +668,7 @@ do_flush_menu() {
         echo -e " 2) FirewallBlock (Static)     [v4/v6]"
         echo -e " 3) VPNBlock (VPN Bad IPs)     [v4]"
         echo -e " 4) Whitelist (Trusted)        [v4/v6]"
+        echo -e " 5) Manual Blocklists (UI)     [v4/v6]"
         echo -e " 9) ${RED}FLUSH ALL LISTS${NC}"
         echo -e " 0) Back"
         echo ""
@@ -689,12 +699,22 @@ do_flush_menu() {
                 echo -e "${GREEN}Whitelists flushed.${NC}"
                 sleep 1 
                 ;;
+            5) 
+                ipset flush Blacklist 2>/dev/null
+                ipset flush Blacklist6 2>/dev/null
+                > "$BACKUP_MANUAL_V4" 2>/dev/null
+                > "$BACKUP_MANUAL_V6" 2>/dev/null
+                echo -e "${GREEN}Manual Blocklists flushed (RAM & Disk).${NC}"
+                sleep 1 
+                ;;
             9) 
                 echo -e "${RED}WARNING: You are about to remove ALL protections.${NC}"
                 echo -n "Are you sure? (y/n): "
                 read -r confirm
                 if [ "$confirm" = "y" ]; then
                     ipset flush
+                    > "$BACKUP_MANUAL_V4" 2>/dev/null
+                    > "$BACKUP_MANUAL_V6" 2>/dev/null
                     echo -e "${RED}ALL IP SETS FLUSHED.${NC}"
                     sleep 1
                 fi
@@ -718,6 +738,7 @@ do_settings() {
         
         # New Security Modules Status
         if [ "$ENABLE_AUTOBAN" = "true" ]; then ST_BAN_TOG="${GREEN}ON${NC}"; else ST_BAN_TOG="${RED}OFF${NC}"; fi
+		if [ "$ENABLE_MANUAL" = "true" ]; then ST_MAN_TOG="${GREEN}ON${NC}"; else ST_MAN_TOG="${RED}OFF${NC}"; fi
         if [ "$ENABLE_BRUTEFORCE" = "true" ]; then ST_BF_TOG="${GREEN}ON${NC}"; else ST_BF_TOG="${RED}OFF${NC}"; fi
         if [ "$ENABLE_CONNLIMIT" = "true" ]; then ST_CONN="${GREEN}ON${NC}"; else ST_CONN="${RED}OFF${NC}"; fi
 
@@ -734,20 +755,21 @@ do_settings() {
         echo -e " 2) Forward Protection (NAS/DMZ) ....... [$ST_FWD]"
         echo -e "${DIM} ---------------------------------------${NC}"
         echo -e " 3) AutoBan (Dynamic Blacklisting) ..... [$ST_BAN_TOG]"
-        echo -e " 4) BruteForce Protection .............. [$ST_BF_TOG]"
+		echo -e " 4) Manual Blacklists (UI Bans) ........ [$ST_MAN_TOG]"
+        echo -e " 5) BruteForce Protection .............. [$ST_BF_TOG]"
         
         if [ "$CONNLIMIT_CUSTOM" -eq 0 ] 2>/dev/null; then ST_C_CUS="Unlimited"; else ST_C_CUS="${CONNLIMIT_CUSTOM:-150}"; fi
-        echo -e " 5) DDoS ConnLimit (Global: $CONNLIMIT_MAX | Bypass: $ST_C_CUS) ... [$ST_CONN]"
+        echo -e " 6) DDoS ConnLimit (Global: $CONNLIMIT_MAX | Bypass: $ST_C_CUS) ... [$ST_CONN]"
         
         echo -e "${DIM} ---------------------------------------${NC}"
-        echo -e " 6) Manage IPv4 Sources ................ [${WHITE}$CNT_V4 Active${NC}]"
-        echo -e " 7) Manage IPv6 Sources ................ [${WHITE}$CNT_V6 Active${NC}]"
-        echo -e " 8) Allowed Ports (TCP/UDP) ............ [${WHITE}Edit...${NC}]"
-        echo -e " 9) Auto-Ban Timeout ................... [$ST_TIMEOUT]"
-        echo -e " 10) Brute-Force Sensitivity ........... [$ST_BF_SENS]"
-        echo -e " 11) AbuseIPDB Settings ................ [${WHITE}Key & Cooldown${NC}]"
-        echo -e " 12) GeoIP Banned Countries ............ [${WHITE}${BANNED_COUNTRIES:-None}${NC}]"
-        echo -e " 13) Download via Interface (VPN) ...... [$UI_UPD_IF]"
+        echo -e " 7) Manage IPv4 Sources ................ [${WHITE}$CNT_V4 Active${NC}]"
+        echo -e " 8) Manage IPv6 Sources ................ [${WHITE}$CNT_V6 Active${NC}]"
+        echo -e " 9) Allowed Ports (TCP/UDP) ............ [${WHITE}Edit...${NC}]"
+        echo -e " 10) Auto-Ban Timeout ................... [$ST_TIMEOUT]"
+        echo -e " 11) Brute-Force Sensitivity ........... [$ST_BF_SENS]"
+        echo -e " 12) AbuseIPDB Settings ................ [${WHITE}Key & Cooldown${NC}]"
+        echo -e " 13) GeoIP Banned Countries ............ [${WHITE}${BANNED_COUNTRIES:-None}${NC}]"
+        echo -e " 14) Download via Interface (VPN) ...... [$UI_UPD_IF]"
         echo ""
         echo -e " 0) ${GREEN}Apply Changes & Return${NC} (Restarts Hook)"
         echo -e " x) ${RED}Return WITHOUT applying${NC} (Keep current rules)"
@@ -798,11 +820,30 @@ do_settings() {
                 fi
                 save_config 
                 ;;
-            4) 
+			4) 
+                if [ "$ENABLE_MANUAL" = "true" ]; then 
+                    ENABLE_MANUAL="false"
+                    echo ""
+                    echo -e "${YELLOW}Manual Blacklists Disabled.${NC}"
+                    read -p "Do you want to FLUSH existing manual bans? (y/n): " flush_confirm
+                    if [ "$flush_confirm" = "y" ]; then
+                        ipset flush Blacklist 2>/dev/null
+                        ipset flush Blacklist6 2>/dev/null
+                        > "$BACKUP_MANUAL_V4" 2>/dev/null
+                        > "$BACKUP_MANUAL_V6" 2>/dev/null
+                        echo -e "${GREEN}Manual Blacklists cleared.${NC}"
+                        sleep 1
+                    fi
+                else 
+                    ENABLE_MANUAL="true"
+                fi
+                save_config 
+                ;;			
+            5) 
                 if [ "$ENABLE_BRUTEFORCE" = "true" ]; then ENABLE_BRUTEFORCE="false"; else ENABLE_BRUTEFORCE="true"; fi
                 save_config 
                 ;;
-            5) 
+            6) 
                 if [ "$ENABLE_CONNLIMIT" = "true" ]; then 
                     echo -e "\n${YELLOW}--- ConnLimit Settings ---${NC}"
                     echo " 1) Disable Protection"
@@ -830,14 +871,14 @@ do_settings() {
                 fi
                 save_config 
                 ;;
-            6) do_manage_sources "V4" ;;
-            7) do_manage_sources "V6" ;;
-            8) do_port_editor ;;
-            9) do_timeout_setup ;;
-            10) do_bf_setup ;;
-            11) do_reporter_setup ;;
-            12) do_geoip_setup ;;
-            13) 
+            7) do_manage_sources "V4" ;;
+            8) do_manage_sources "V6" ;;
+            9) do_port_editor ;;
+            10) do_timeout_setup ;;
+            11) do_bf_setup ;;
+            12) do_reporter_setup ;;
+            13) do_geoip_setup ;;
+            14) 
                 clear
                 echo -e "${CYAN}--- INTERFACE SELECTION WIZARD ---${NC}"
                 echo -e "Detecting active interfaces with traffic...\n"
@@ -933,14 +974,14 @@ do_health_check() {
 
     # Check Scheduler (CRON & JOB) - ROBUST FIX
     # Check both 'crond' and 'cron' using ps
-    if ! ps | grep -v grep | grep -qE "crond|cron"; then 
+    if ! ps | grep -v grep | grep -qE "cron"; then 
         echo -e "   Scheduler (CRON):   ${RED}STOPPED (Daemon not running)${NC}"
     else 
-        # Daemon is running, verify if the job exists
-        if crontab -l 2>/dev/null | grep -q "update_blocklist.sh"; then
-            echo -e "   Scheduler (CRON):   ${GREEN}ACTIVE (Job scheduled)${NC}"
+        # Daemon is running, verify if the job exists directly in the config file
+        if grep -q "update_blocklist.sh" /opt/etc/crontab 2>/dev/null; then
+            echo -e "   Scheduler (CRON):   ${GREEN}ACTIVE (Jobs scheduled)${NC}"
         else
-            echo -e "   Scheduler (CRON):   ${YELLOW}WARNING (Daemon ON, but Job MISSING)${NC}"
+            echo -e "   Scheduler (CRON):   ${YELLOW}WARNING (Daemon ON, but Jobs MISSING)${NC}"
         fi
     fi
 
@@ -969,6 +1010,14 @@ do_health_check() {
         echo -e "   Auto-Ban (Trap):    ${RED}MISSING${NC}"
     fi
     
+    # Manual Blocklist IPv4 Status
+    CNT_MANUAL=$(ipset list Blacklist 2>/dev/null | grep -cE '^[0-9]')
+    if ipset list Blacklist >/dev/null 2>&1; then 
+        echo -e "   Manual Blocklist:   ${GREEN}ACTIVE${NC} (${CYAN}$CNT_MANUAL IPs${NC})"
+    else 
+        echo -e "   Manual Blocklist:   ${DIM}MISSING / EMPTY${NC}"
+    fi
+    
     CNT_VPN=$(ipset list VPNBlock 2>/dev/null | grep -cE '^[0-9]')
     echo -e "   VPN Blocklist:      ${CYAN}$CNT_VPN IPs${NC}"
     
@@ -986,6 +1035,7 @@ do_health_check() {
     
     # --- IPv6 ---
     if [ "$ENABLE_IPV6" = "true" ]; then
+        echo -e "   ${DIM}--- IPv6 Sets ---${NC}"
         CNT_V6=$(ipset list FirewallBlock6 2>/dev/null | grep -cE '^[0-9a-fA-F:]')
         if [ "$CNT_V6" -gt 10 ]; then STATUS="${GREEN}OK ($CNT_V6 IPs)${NC}"; else STATUS="${RED}CRITICAL (Empty: $CNT_V6)${NC}"; fi
         echo -e "   IPv6 Blocklist:     $STATUS"
@@ -999,6 +1049,14 @@ do_health_check() {
             echo -e "   Auto-Ban6 (Trap):   ${GREEN}ACTIVE${NC} (${RED}$CNT_BAN6 IPs${NC})"
         else 
             echo -e "   Auto-Ban6 (Trap):   ${RED}MISSING${NC}"
+        fi
+        
+        # Manual Blocklist IPv6 Status
+        CNT_MANUAL6=$(ipset list Blacklist6 2>/dev/null | grep -cE '^[0-9a-fA-F:]')
+        if ipset list Blacklist6 >/dev/null 2>&1; then 
+            echo -e "   Manual Blocklist6:  ${GREEN}ACTIVE${NC} (${CYAN}$CNT_MANUAL6 IPs${NC})"
+        else 
+            echo -e "   Manual Blocklist6:  ${DIM}MISSING / EMPTY${NC}"
         fi
         
         # GeoIP IPv6 Status
@@ -1025,12 +1083,14 @@ do_health_check() {
     check_chain "iptables" "BLOCKLIST_IN" "INPUT"
     check_chain "iptables" "BLOCKLIST_FWD" "FORWARD"
     check_chain "iptables" "SCAN_TRAP" "BLOCKLIST_IN"
+	check_chain "iptables" "BLACKLIST" "BLOCKLIST_IN"
     
     if [ "$ENABLE_IPV6" = "true" ]; then
         echo -e "   ${DIM}--- IPv6 Chains ---${NC}"
         check_chain "ip6tables" "BLOCKLIST_IN6" "INPUT"
         check_chain "ip6tables" "BLOCKLIST_FWD6" "FORWARD"
         check_chain "ip6tables" "SCAN_TRAP6" "BLOCKLIST_IN6"
+		check_chain "ip6tables" "BLACKLIST6" "BLOCKLIST_IN6"
     fi
     
     echo ""
