@@ -1,9 +1,11 @@
 #!/bin/sh
 
 # ==============================================================================
-# KEENETIC FIREWALL HOOK v2.9.0 (MASTER SWITCH & MANUAL BLACKLISTS)
+# KEENETIC FIREWALL HOOK v2.9.1 (MASTER SWITCH & MANUAL BLACKLISTS)
 # Description: Dual-Stack Firewall with Auto-Ban, Connlimit & Port Logging.
 # Features:
+#   - FIX [v2.9.1]: Resolved "No chain" errors using a safe 'init_chain' function with '-w 2' (xtables lock wait).
+#   - FIX [v2.9.1]: Fixed missing linkage for Manual Blocklists (BLACKLIST/BLACKLIST6) to main firewall chains.
 #   - NEW [v2.9.0]: Interactive Manual Blocklists (Blacklist/Blacklist6) via Dashboard.
 #   - NEW [v2.9.0]: Instant persistence and restore for Manual Blocklists.
 #   - NEW [v2.9.0]: RAM cleanup (flush & destroy) for Manual Blocklists on Switch OFF.
@@ -259,14 +261,18 @@ fi
 # SECTION A: IPv4 LOGIC
 # ==============================================================================
 
-iptables -N BLOCKLIST_IN 2>/dev/null; iptables -F BLOCKLIST_IN
-iptables -N BLOCKLIST_FWD 2>/dev/null; iptables -F BLOCKLIST_FWD
-iptables -N SCAN_TRAP 2>/dev/null;     iptables -F SCAN_TRAP
-iptables -N BLACKLIST 2>/dev/null;     iptables -F BLACKLIST
+init_chain() {
+    $1 -w 2 -N "$2" 2>/dev/null || $1 -w 2 -F "$2" 2>/dev/null
+}
+
+init_chain iptables BLOCKLIST_IN
+init_chain iptables BLOCKLIST_FWD
+init_chain iptables SCAN_TRAP
+init_chain iptables BLACKLIST
 
 # Sub-chains for granular checks
-iptables -N FW_CHK_CONN 2>/dev/null;   iptables -F FW_CHK_CONN
-iptables -N FW_CHK_BRUTE 2>/dev/null;  iptables -F FW_CHK_BRUTE
+init_chain iptables FW_CHK_CONN
+init_chain iptables FW_CHK_BRUTE
 
 # --- WHITELISTS (Global & Local) ---
 iptables -A BLOCKLIST_IN -s 127.0.0.0/8 -j RETURN
@@ -445,14 +451,14 @@ iptables -I FORWARD -j BLOCKLIST_FWD
 # ==============================================================================
 
 if [ "$ENABLE_IPV6" = "true" ]; then
-    ip6tables -N BLOCKLIST_IN6 2>/dev/null; ip6tables -F BLOCKLIST_IN6
-    ip6tables -N BLOCKLIST_FWD6 2>/dev/null; ip6tables -F BLOCKLIST_FWD6
-    ip6tables -N SCAN_TRAP6 2>/dev/null;     ip6tables -F SCAN_TRAP6
-	ip6tables -N BLACKLIST6 2>/dev/null;    ip6tables -F BLACKLIST6
+    init_chain ip6tables BLOCKLIST_IN6
+    init_chain ip6tables BLOCKLIST_FWD6
+    init_chain ip6tables SCAN_TRAP6
+    init_chain ip6tables BLACKLIST6
     
     # Sub-chains for granular checks
-    ip6tables -N FW_CHK_CONN6 2>/dev/null;   ip6tables -F FW_CHK_CONN6
-    ip6tables -N FW_CHK_BRUTE6 2>/dev/null;  ip6tables -F FW_CHK_BRUTE6
+    init_chain ip6tables FW_CHK_CONN6
+    init_chain ip6tables FW_CHK_BRUTE6
     
     # Whitelists
     ip6tables -A BLOCKLIST_IN6 -s ::1/128 -j RETURN
