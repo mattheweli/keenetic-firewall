@@ -1,17 +1,19 @@
 #!/bin/sh
 
 # ==============================================================================
-# ABUSEIPDB AUTO-REPORTER v2.2.0 (GEO-IP EDITION)
+# ABUSEIPDB AUTO-REPORTER v2.2.1 (GEO-IP EDITION)
 # ==============================================================================
 # Description: 
 #   Auto-reports malicious IPs to AbuseIPDB.
+#
+#	CHANGES v2.2.1:
+#     - OPT: Added a 5-second hard timeout (-m 5) to the AbuseIPDB API 
+#       curl request to prevent infinite hanging and RAM consumption.
 #
 #   CHANGES v2.2.0:
 #     - NEW: Added dedicated reporting for GeoIP blocklist hits.
 #     - FIX: Separated 'main' subnets from 'geo' subnets to prevent overlap.
 #
-#   CHANGES v2.1.2:
-#     - API LIMIT: Truncates port lists in comments to a maximum of 200 chars.
 # ==============================================================================
 
 export PATH=/opt/bin:/opt/sbin:/usr/bin:/usr/sbin:/bin:/sbin
@@ -100,7 +102,7 @@ send_report() {
     echo "    -> Reporting $IP..."
 
     # 5. Send to AbuseIPDB
-    RESPONSE=$(curl -s https://api.abuseipdb.com/api/v2/report \
+    RESPONSE=$(curl -s -m 5 https://api.abuseipdb.com/api/v2/report \
         --data-urlencode "ip=$IP" \
         --data-urlencode "categories=$CATS" \
         --data-urlencode "comment=$FINAL_COMMENT" \
