@@ -1,13 +1,16 @@
 #!/bin/sh
 
 # ==============================================================================
-# KEENETIC FIREWALL STATS v3.7.0 (INTERACTIVE DASHBOARD)
+# KEENETIC FIREWALL STATS v3.7.1 (INTERACTIVE DASHBOARD)
 # ==============================================================================
 # AUTHOR: mattheweli
 # DESCRIPTION: 
 #   Aggregates firewall statistics, parses sniffer data for port mapping,
 #   and generates JSON data for the web dashboard.
 #
+#	  - OPT [v3.7.1]: Avoid Duplicate Temporary SQL Files (Stream directly via Pipe).
+#     - OPT [v3.7.1]: Optimize Port List File Writing in get_port_stats() fixing massive iowait spikes.
+#     - OPT [v3.7.1]: Hard-Limit Networking Timeout in the AbuseIPDB API Loop.
 #     - NEW [v3.7.0]: Integrated Interactive PHP Backend API (firewall_api.php).
 #     - NEW [v3.7.0]: Added Frontend support for real-time IP Lookup, Ban, and Unban.
 #     - NEW [v3.7.0]: Added Manual Blocklists (Blacklist/Blacklist6) tracking and persistence.
@@ -117,7 +120,7 @@ NOW=$($DATE_CMD +%s)
 NEW_DROPS_V4=0; NEW_DROPS_V6=0; NEW_DROPS_VPN=0; NEW_DROPS_TRAP=0; NEW_DROPS_TRAP6=0; NEW_DROPS_GEO=0; NEW_DROPS_GEO6=0; NEW_DROPS_MANUAL=0; NEW_DROPS_MANUAL6=0
 NEW_IP_RECORDS=0
 
-echo "=== Firewall Stats Updater v3.7.0 ==="
+echo "=== Firewall Stats Updater v3.7.1 ==="
 
 # ==============================================================================
 # 3. DATABASE INITIALIZATION & TUNING
@@ -336,8 +339,7 @@ awk '{print $1, $2}' "$CURRENT_DUMP" > "$IP_LAST_STATE"
 # Bulk Insert into DB
 if [ -s "$SQL_IMPORT" ]; then
     NEW_IP_RECORDS=$(wc -l < "$SQL_IMPORT")
-    echo "BEGIN TRANSACTION;" > /tmp/ip_trans.sql; cat "$SQL_IMPORT" >> /tmp/ip_trans.sql; echo "COMMIT;" >> /tmp/ip_trans.sql
-    sqlite3 "$DB_FILE" < /tmp/ip_trans.sql; rm /tmp/ip_trans.sql
+    (echo "BEGIN TRANSACTION;"; cat "$SQL_IMPORT"; echo "COMMIT;") | sqlite3 "$DB_FILE"
 fi
 rm "$CURRENT_DUMP" "$SQL_IMPORT" 2>/dev/null
 
@@ -548,7 +550,7 @@ get_ip_table() {
             
             else
                 # 3. Query AbuseIPDB only for real Public IPs with >= 5 hits
-                J=$(curl -s -m 3 -G https://api.abuseipdb.com/api/v2/check --data-urlencode "ipAddress=$CLEAN_IP" -d maxAgeInDays=90 -H "Key: $ABUSEIPDB_KEY" -H "Accept: application/json" || echo "")
+                J=$(curl -s -m 1 -G https://api.abuseipdb.com/api/v2/check --data-urlencode "ipAddress=$CLEAN_IP" -d maxAgeInDays=90 -H "Key: $ABUSEIPDB_KEY" -H "Accept: application/json" || echo "")
                 CO=$(echo "$J"|grep -o '"countryCode":"[^"]*"'|cut -d'"' -f4)
                 SC=$(echo "$J"|grep -o '"abuseConfidenceScore":[0-9]*'|cut -d':' -f2)
                 DO=$(echo "$J"|grep -o '"domain":"[^"]*"'|cut -d'"' -f4)
@@ -645,7 +647,11 @@ get_port_stats() {
         gsub(/[ \t\r\n]+/, "", ips_raw); 
         filename = prefix "_" port_num ".txt"; filepath = listdir "/" filename;
         split(ips_raw, ip_array, ","); 
-        printf "" > filepath; for (i in ip_array) { print ip_array[i] >> filepath; } close(filepath);
+        
+        ips_formatted = ips_raw;
+        gsub(",", "\n", ips_formatted); 
+        print ips_formatted > filepath; 
+        close(filepath);
         
         display_ips = ""; c = 0; 
         for (i in ip_array) { c++; if (c <= 3) { if (display_ips != "") display_ips = display_ips ", "; display_ips = display_ips ip_array[i]; } }
