@@ -1,15 +1,18 @@
 #!/bin/sh
 
 # ==============================================================================
-# KEENETIC FIREWALL HOOK v2.9.1 (MASTER SWITCH & MANUAL BLACKLISTS)
+# KEENETIC FIREWALL HOOK v2.9.3 (MASTER SWITCH & MANUAL BLACKLISTS)
 # Description: Dual-Stack Firewall with Auto-Ban, Connlimit & Port Logging.
 # Features:
-#   - FIX [v2.9.1]: Resolved "No chain" errors using a safe 'init_chain' function with '-w 2' (xtables lock wait).
+#   - FIX [v2.9.3]: Removed numeric argument from iptables wait flag (-w) to fix "Bad argument '2'" error on v1.4.21.
+#   - FIX [v2.9.2]: Corrected Manual Blacklist (BLACKLIST/BLACKLIST6) rule insertion for proper modularity.
+#   - FIX [v2.9.2]: Fixed chain jump order (Blacklist before Trap) to ensure correct ULOGD PCAP population.
+#   - FIX [v2.9.1]: Resolved "No chain" errors using a safe 'init_chain' function with '-w' (xtables lock wait).
 #   - FIX [v2.9.1]: Fixed missing linkage for Manual Blocklists (BLACKLIST/BLACKLIST6) to main firewall chains.
 #   - NEW [v2.9.0]: Interactive Manual Blocklists (Blacklist/Blacklist6) via Dashboard.
 #   - NEW [v2.9.0]: Instant persistence and restore for Manual Blocklists.
 #   - NEW [v2.9.0]: RAM cleanup (flush & destroy) for Manual Blocklists on Switch OFF.
-#   - NEW: Restore GeoIP lists from disk if backup files exist
+#   - NEW: Restore GeoIP lists from disk if backup files exist.
 #   - NEW: Global Kill Switch (ENABLE_FIREWALL) to flush and disable all rules.
 #   - NEW: GeoIP Blocking integration (Kernel-level drops for banned countries).
 #   - NEW: DDoS Mitigation with Global & Custom Bypass ConnLimits.
@@ -76,6 +79,7 @@ else
 fi
 
 # Fallback defaults if config file exists but variable is missing
+: ${ENABLE_MANUAL:="true"}
 : ${ENABLE_AUTOBAN:="true"}
 : ${ENABLE_BRUTEFORCE:="true"}
 : ${ENABLE_CONNLIMIT:="true"}
@@ -262,7 +266,7 @@ fi
 # ==============================================================================
 
 init_chain() {
-    $1 -w 2 -N "$2" 2>/dev/null || $1 -w 2 -F "$2" 2>/dev/null
+    $1 -w -N "$2" 2>/dev/null || $1 -w -F "$2" 2>/dev/null
 }
 
 init_chain iptables BLOCKLIST_IN
@@ -323,10 +327,8 @@ fi
 
 # Manual Blacklist IPv4
 if [ "$ENABLE_MANUAL" = "true" ] && ipset list -n "$IPSET_BLACKLIST" >/dev/null 2>&1; then
-    iptables -A BLOCKLIST_IN -m set --match-set "$IPSET_BLACKLIST" src -j NFLOG --nflog-group 1 --nflog-range 128 --nflog-prefix "FW_DROP"
-    iptables -A BLOCKLIST_IN -m set --match-set "$IPSET_BLACKLIST" src -j DROP
-    iptables -A BLOCKLIST_FWD -m set --match-set "$IPSET_BLACKLIST" src -j NFLOG --nflog-group 1 --nflog-range 128 --nflog-prefix "FW_DROP"
-    iptables -A BLOCKLIST_FWD -m set --match-set "$IPSET_BLACKLIST" src -j DROP
+    iptables -w -A BLACKLIST -m set --match-set "$IPSET_BLACKLIST" src -j NFLOG --nflog-group 1 --nflog-range 128 --nflog-prefix "FW_DROP"
+    iptables -w -A BLACKLIST -m set --match-set "$IPSET_BLACKLIST" src -j DROP
 fi
 
 # --- THE HONEYPOT TRAP (SCAN_TRAP) ---
@@ -432,19 +434,24 @@ iptables -A SCAN_TRAP -j NFLOG --nflog-group 1 --nflog-range 128 --nflog-prefix 
 iptables -A SCAN_TRAP -j DROP
 
 # --- LINK CHAINS ---
-iptables -A BLOCKLIST_IN -j SCAN_TRAP
-iptables -A BLOCKLIST_IN -j BLACKLIST
+if [ "$ENABLE_MANUAL" = "true" ]; then
+    iptables -w -A BLOCKLIST_IN -j BLACKLIST
+    iptables -w -A BLOCKLIST_FWD -j BLACKLIST
+fi
+
+iptables -w -A BLOCKLIST_IN -j SCAN_TRAP
 
 # CONDITIONAL FWD PROTECTION
 if [ "$ENABLE_FWD_PROTECTION" = "true" ]; then
-    iptables -A BLOCKLIST_FWD -j SCAN_TRAP
+    iptables -w -A BLOCKLIST_FWD -j SCAN_TRAP
 fi
 
-if iptables -C INPUT -j BLOCKLIST_IN 2>/dev/null; then iptables -D INPUT -j BLOCKLIST_IN; fi
-iptables -I INPUT -j BLOCKLIST_IN
+if iptables -C INPUT -j BLOCKLIST_IN 2>/dev/null; then iptables -w -D INPUT -j BLOCKLIST_IN; fi
+iptables -w -I INPUT -j BLOCKLIST_IN
 
-if iptables -C FORWARD -j BLOCKLIST_FWD 2>/dev/null; then iptables -D FORWARD -j BLOCKLIST_FWD; fi
-iptables -I FORWARD -j BLOCKLIST_FWD
+if iptables -C FORWARD -j BLOCKLIST_FWD 2>/dev/null; then iptables -w -D FORWARD -j BLOCKLIST_FWD; fi
+iptables -w -I FORWARD -j BLOCKLIST_FWD
+
 
 # ==============================================================================
 # SECTION B: IPv6 LOGIC
@@ -498,12 +505,10 @@ if [ "$ENABLE_IPV6" = "true" ]; then
         ip6tables -A BLOCKLIST_FWD6 -m set --match-set "$IPSET_AUTOBAN6" src -j DROP
     fi
 	
-	# Manual Blacklist IPv6
+	    # Manual Blacklist IPv6
     if [ "$ENABLE_MANUAL" = "true" ] && ipset list -n "$IPSET_BLACKLIST6" >/dev/null 2>&1; then
-        ip6tables -A BLOCKLIST_IN6 -m set --match-set "$IPSET_BLACKLIST6" src -j NFLOG --nflog-group 1 --nflog-range 128 --nflog-prefix "FW_DROP6"
-        ip6tables -A BLOCKLIST_IN6 -m set --match-set "$IPSET_BLACKLIST6" src -j DROP
-        ip6tables -A BLOCKLIST_FWD6 -m set --match-set "$IPSET_BLACKLIST6" src -j NFLOG --nflog-group 1 --nflog-range 128 --nflog-prefix "FW_DROP6"
-        ip6tables -A BLOCKLIST_FWD6 -m set --match-set "$IPSET_BLACKLIST6" src -j DROP
+        ip6tables -w -A BLACKLIST6 -m set --match-set "$IPSET_BLACKLIST6" src -j NFLOG --nflog-group 1 --nflog-range 128 --nflog-prefix "FW_DROP6"
+        ip6tables -w -A BLACKLIST6 -m set --match-set "$IPSET_BLACKLIST6" src -j DROP
     fi
 
     # Trap Logic
@@ -583,20 +588,24 @@ if [ "$ENABLE_IPV6" = "true" ]; then
     ip6tables -A SCAN_TRAP6 -j NFLOG --nflog-group 1 --nflog-range 128 --nflog-prefix "TRAP6"
     ip6tables -A SCAN_TRAP6 -j DROP
 
-    # Links
-    ip6tables -A BLOCKLIST_IN6 -j SCAN_TRAP6
-	ip6tables -A BLOCKLIST_IN6 -j BLACKLIST6
+            # Links
+    if [ "$ENABLE_MANUAL" = "true" ]; then
+        ip6tables -w -A BLOCKLIST_IN6 -j BLACKLIST6
+        ip6tables -w -A BLOCKLIST_FWD6 -j BLACKLIST6
+    fi
+
+    ip6tables -w -A BLOCKLIST_IN6 -j SCAN_TRAP6
     
     # CONDITIONAL FWD PROTECTION (IPv6)
     if [ "$ENABLE_FWD_PROTECTION" = "true" ]; then
-        ip6tables -A BLOCKLIST_FWD6 -j SCAN_TRAP6
+        ip6tables -w -A BLOCKLIST_FWD6 -j SCAN_TRAP6
     fi
     
-    if ip6tables -C INPUT -j BLOCKLIST_IN6 2>/dev/null; then ip6tables -D INPUT -j BLOCKLIST_IN6; fi
-    ip6tables -I INPUT -j BLOCKLIST_IN6
+    if ip6tables -C INPUT -j BLOCKLIST_IN6 2>/dev/null; then ip6tables -w -D INPUT -j BLOCKLIST_IN6; fi
+    ip6tables -w -I INPUT -j BLOCKLIST_IN6
 
-    if ip6tables -C FORWARD -j BLOCKLIST_FWD6 2>/dev/null; then ip6tables -D FORWARD -j BLOCKLIST_FWD6; fi
-    ip6tables -I FORWARD -j BLOCKLIST_FWD6
+    if ip6tables -C FORWARD -j BLOCKLIST_FWD6 2>/dev/null; then ip6tables -w -D FORWARD -j BLOCKLIST_FWD6; fi
+    ip6tables -w -I FORWARD -j BLOCKLIST_FWD6
 
 else
     ip6tables -D INPUT -j BLOCKLIST_IN6 2>/dev/null
