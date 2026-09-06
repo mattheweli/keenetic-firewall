@@ -1,14 +1,15 @@
 #!/bin/sh
 
 # ==============================================================================
-# KEENETIC FIREWALL STATS v3.7.1 (INTERACTIVE DASHBOARD)
+# KEENETIC FIREWALL STATS v3.7.2 (INTERACTIVE DASHBOARD)
 # ==============================================================================
 # AUTHOR: mattheweli
 # DESCRIPTION: 
 #   Aggregates firewall statistics, parses sniffer data for port mapping,
 #   and generates JSON data for the web dashboard.
 #
-#	  - OPT [v3.7.1]: Avoid Duplicate Temporary SQL Files (Stream directly via Pipe).
+#     - FIX [v3.7.2]: Resolved awk scientific notation rounding bug on PCAP timestamps preventing incremental sniffer parsing.
+#     - OPT [v3.7.1]: Avoid Duplicate Temporary SQL Files (Stream directly via Pipe).
 #     - OPT [v3.7.1]: Optimize Port List File Writing in get_port_stats() fixing massive iowait spikes.
 #     - OPT [v3.7.1]: Hard-Limit Networking Timeout in the AbuseIPDB API Loop.
 #     - NEW [v3.7.0]: Integrated Interactive PHP Backend API (firewall_api.php).
@@ -120,7 +121,7 @@ NOW=$($DATE_CMD +%s)
 NEW_DROPS_V4=0; NEW_DROPS_V6=0; NEW_DROPS_VPN=0; NEW_DROPS_TRAP=0; NEW_DROPS_TRAP6=0; NEW_DROPS_GEO=0; NEW_DROPS_GEO6=0; NEW_DROPS_MANUAL=0; NEW_DROPS_MANUAL6=0
 NEW_IP_RECORDS=0
 
-echo "=== Firewall Stats Updater v3.7.1 ==="
+echo "=== Firewall Stats Updater v3.7.2 ==="
 
 # ==============================================================================
 # 3. DATABASE INITIALIZATION & TUNING
@@ -361,14 +362,20 @@ if [ -n "$LOG_BUFFER" ] && [ -s "$LOG_BUFFER" ]; then
     if [ -f "$LAST_TS_FILE" ]; then LAST_TS=$(cat "$LAST_TS_FILE"); else LAST_TS=0; fi
     
     # 2. PHASE 1: Parse PCAP & Deduplicate (Only NEW packets)
-    # We use tcpdump with -tt to get exact epoch timestamps.
-    # Awk immediately discards packets with timestamp <= the last run.
     tcpdump -tt -r "$LOG_BUFFER" -nn 2>/dev/null | awk -v last_ts="$LAST_TS" '
-    BEGIN { max_ts = last_ts + 0; }
+    BEGIN { 
+        max_ts_num = last_ts + 0; 
+        max_ts_str = last_ts; 
+    }
     {
-        current_ts = $1 + 0; # Convert timestamp to numeric format (float)
-        if (current_ts <= last_ts) next; # SKIP OLD PACKETS!
-        if (current_ts > max_ts) max_ts = current_ts;
+        current_ts_num = $1 + 0;
+        if (current_ts_num <= (last_ts + 0)) next; # SKIP OLD PACKETS!
+        
+        # Update the timestamp by saving the exact text STRING from tcpdump
+        if (current_ts_num > max_ts_num) {
+            max_ts_num = current_ts_num;
+            max_ts_str = $1; 
+        }
         
         # Robust Arrow Detection (SLL/Ethernet safe)
         arrow_idx = 0;
@@ -392,7 +399,7 @@ if [ -n "$LOG_BUFFER" ] && [ -s "$LOG_BUFFER" ]; then
             if (m == 5 || m == 2) port_str = b[m];
             else port_str = 0;
             
-            gsub(/[^0-9]/, "", port_str); # Assicura che sia solo numerico
+            gsub(/[^0-9]/, "", port_str); # Ensure it is strictly numeric
             if (port_str == "") port_str = 0;
 
             # Extract Proto
@@ -406,8 +413,8 @@ if [ -n "$LOG_BUFFER" ] && [ -s "$LOG_BUFFER" ]; then
         }
     }
     END { 
-        # Save the new time limit for the next run
-        print max_ts > "'"$LAST_TS_FILE"'" 
+        # Print the pure string, bypassing the BusyBox formatting bug
+        print max_ts_str > "'"$LAST_TS_FILE"'" 
     }' | sort -u > "$UNIQUE_TRAFFIC"
 
     TRAFFIC_COUNT=$(wc -l < "$UNIQUE_TRAFFIC")
