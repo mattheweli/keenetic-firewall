@@ -1,24 +1,21 @@
-# keenetic-firewall 4.0.0
+# keenetic-firewall 4.0.1
 
-Baseline: `85567431ac3b5ba7c7f4e3a965b63db1d9c684ad`.
+Relative to published v4.0.0 (`55dc2b0404de3ddd0fa87e333ee7a91aeedfd0ca` on main).
 
-- Firewall repository 4.0.0 coordinates monitor/statistics 4.0.0, hook/manager/updater/VPN/abuse tools 3.0.0 and dashboard/API/loader 2.0.0. New security helpers are 1.0.0.
-- Hook: dual-family staged/preflight apply, owned-chain replacement and recovery, exact jump teardown, bounded NFLOG independent of DROP, explicit bypasses, coherent enable/IPv6 switches and timeout-capable managed manual bans. Avoid global tcpdump termination.
-- Restore saved static/GeoIP/manual/dynamic sets before filtering, including partially populated sets; preserve saved timeout semantics and checkpoint only verified state. Persistent PCAP path and incremental cursor survive normal updates/reboot handling.
-- Validate/cache each source, stage kernel sets before swap, reject empty/incomplete/main-list catastrophic shrink candidates, retain installed lists on failure. GeoIP size changes use advisory thresholds and explicit policy baselines. Record detailed download/staging/persistence/cache causes, current/previous counts and last successful installation.
-- Password-only admin, HTTPS/CSRF/session/boot checks, guest read-only logs and hidden write controls, root command broker and optional reviewed web privilege separation. Manual ban TTL, IP/subnet diagnostics, event timeline, health summaries and typed Settings are supplied by the shared runtime.
-- Preserve historical records and full port lists; portable AWK generation, grouped counters, expandable port badges, IPv6 difference/total display, readable ULOGD timestamps, geographic chart improvements and aligned responsive tables.
-- Explicit lossless database optimization with verified SQLite backup and integrity checks; no implicit pruning/rollup. Shared HTML/plain periodic reports and detailed colored security digest.
-- IPdeny IPv6 KP HTTP 404/cache age limitations remain documented. Source failures never imply automatic exclusion of a country.
+- Aggregate older per-IP/list samples into hourly and daily buckets without deleting hit totals or IP/list identities. Leave recent raw samples unchanged. The `resolution` default preserves collector insert compatibility and existing read queries.
+- Verify a private SQLite online backup before the first aggregation. Use a single guarded write transaction checking per-IP/list totals, local-day totals and recent samples, plus integrity checks, free-space preflight and the collector's writer lock. Refuse unexpected schema/triggers, invalid counts and timezone changes; preserve data on failure.
+- Run maintenance at most daily from the existing statistics schedule, before dashboard export. Keep preview read-only and standalone maintenance independent of kernel/capture reads. Reclaim free pages with VACUUM; retain the original baseline backup separately.
+- Respect local calendar days and repeated DST hours; retain existing coarser buckets when thresholds increase. Explain irreversible precision reduction and approximate period boundaries on the dashboard and in Security diagnostics.
+- Add isolated real SQLite/PHP-core tests for aggregation, DST, exact totals/recent sample preservation, full port/report/global state, private backups, idempotence, disabled/increased policies, backup failure, integer-overflow rollback and writer locking. Existing installation, updater, security and UI checks remain in the suite.
 
-## Installation and compatibility
+See [FIREWALL_HISTORY.md](docs/FIREWALL_HISTORY.md) for policy, measured size reduction, configuration and baseline-backup limitations. Previous stable notes remain in [STABLE_2.0.0.md](docs/history/STABLE_2.0.0.md); alpha history is archived separately.
 
-Install/update through the complete KeenTool 2.0.0 suite asset. Component archives require the coordinated shared runtime; do not replace isolated scripts over older installations. Existing settings, credentials, databases and upgrade schedules are preserved. Read the suite docs/INSTALL.md and SECURITY.md.
+## Upgrade and history precision
 
-## Known feed limitation
+Install the complete KeenTool 2.0.1 suite through `keentool --update`. Component sources require the coordinated runtime; do not install isolated scripts. Existing settings, credentials, schedules and databases are preserved by the installer. Missing history defaults are enabled (7 days of samples, hourly through 30 days, daily thereafter). Aggregation starts at the next normal firewall statistics job, after a verified private baseline backup, and then runs at most daily. Configure it in KeenTool → Firewall → History aggregation settings, or authenticated Settings → Firewall history.
 
-IPdeny IPv6 KP may return HTTP 404; incomplete candidates retain the installed GeoBlock6 list. Cached installation time is not source freshness. This is reported explicitly, not silently bypassed.
+All IP/list and calendar-day hit totals remain exact; older time precision is reduced irreversibly. Period boundaries crossing a bucket and historical first/last timestamps are approximate and labeled. Global counters, full port histories and reporting state are untouched. Increasing thresholds or disabling aggregation cannot reconstruct prior detail. The baseline backup is retained separately and occupies storage; restoring it later would lose events collected since that backup. See suite/docs/FIREWALL_HISTORY.md.
 
 ## Validation
 
-See suite docs/VALIDATION.md for isolated regression results and the live-router acceptance steps that remain before publication. This prepared release is a draft; no router reboot or public deployment is claimed.
+45 isolated regression checks passed, including real SQLite/PHP-core aggregation, DST transitions, backup verification, rollback on integer overflow, writer locking and installer/updater compatibility. A private database copy reduced from 46.9 MB to 43.8 MB with all 30,626,489 hits and all metadata/global/report state preserved; production dashboard SQL/geography export passed. No private database is distributed. Physical-router execution/reboot and live SMTP were not independently tested for this patch.

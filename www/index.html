@@ -1,21 +1,21 @@
-<!-- Changelog 2.0.0: uniform numeric presentation and refreshed shared layout. -->
-<!-- Changelog 2.0.0: shared topbar refresh replaces independent page refresh controls. -->
-<!-- Changelog 2.0.0: navigation to the protected Settings page. -->
-<!-- Changelog 2.0.0: refresh shared diagnostics and blocklist detail handling. -->
-<!-- Changelog 2.0.0: shared readable tables, density preference, restrained colors and uniform controls. -->
-<!-- Changelog 2.0.0: align numeric Traffic History headers and cells despite shared theme heading defaults; keep history values on one line. -->
-<!-- Changelog 2.0.0: align geographic column headings and panel edges; uniform automatic-year copyright footer. -->
-<!-- Changelog 2.0.0: complete country aggregates, blue logarithmic map/legend, top countries, public source details, zoom/reset/fullscreen and unknown-location coverage. -->
-<!-- Changelog 2.0.0: match +N port buttons and visible port badges in font size, weight and line height. -->
-<!-- Changelog 2.0.0: clickable +N targeted-port lists with full read-only preview, copy and download. -->
-<!-- Changelog 2.0.0: status LED reflects full owned-rule verification for both families. -->
-<!-- Changelog 2.0.0: admin-only quick unban, firewall status LED/FW Enable label and dot-grouped counters. -->
-<!-- Changelog 2.0.0: intrinsic numeric column widths; CNT/HITS stay on one line without digit splitting. -->
-<!-- Changelog 2.0.0: cleaner decorative icons, consistent typography/colors and shared log terminal. -->
-<!-- Changelog 2.0.0: full-width layout, collapsible navigation and chart resize. -->
-<!-- Changelog 2.0.0: shared Keenetic-inspired navigation/theme, responsive controls and readable monitoring. -->
-<!-- Firewall Dashboard v2.0.0 | Stable release -->
-<!-- Changelog 2.0.0: English source comments and interface messages. -->
+<!-- Changelog 2.0.1: uniform numeric presentation and refreshed shared layout. -->
+<!-- Changelog 2.0.1: shared topbar refresh replaces independent page refresh controls. -->
+<!-- Changelog 2.0.1: navigation to the protected Settings page. -->
+<!-- Changelog 2.0.1: refresh shared diagnostics and blocklist detail handling. -->
+<!-- Changelog 2.0.1: shared readable tables, density preference, restrained colors and uniform controls. -->
+<!-- Changelog 2.0.1: align numeric Traffic History headers and cells despite shared theme heading defaults; keep history values on one line. -->
+<!-- Changelog 2.0.1: align geographic column headings and panel edges; uniform automatic-year copyright footer. -->
+<!-- Changelog 2.0.1: complete country aggregates, blue logarithmic map/legend, top countries, public source details, zoom/reset/fullscreen and unknown-location coverage. -->
+<!-- Changelog 2.0.1: match +N port buttons and visible port badges in font size, weight and line height. -->
+<!-- Changelog 2.0.1: clickable +N targeted-port lists with full read-only preview, copy and download. -->
+<!-- Changelog 2.0.1: status LED reflects full owned-rule verification for both families. -->
+<!-- Changelog 2.0.1: admin-only quick unban, firewall status LED/FW Enable label and dot-grouped counters. -->
+<!-- Changelog 2.0.1: intrinsic numeric column widths; CNT/HITS stay on one line without digit splitting. -->
+<!-- Changelog 2.0.1: cleaner decorative icons, consistent typography/colors and shared log terminal. -->
+<!-- Changelog 2.0.1: full-width layout, collapsible navigation and chart resize. -->
+<!-- Changelog 2.0.1: shared Keenetic-inspired navigation/theme, responsive controls and readable monitoring. -->
+<!-- Firewall Dashboard v2.0.1 | Stable release -->
+<!-- Changelog 2.0.1: English source comments and interface messages. -->
 
 <!DOCTYPE html>
 <html lang="en">
@@ -315,7 +315,7 @@
 <link rel="stylesheet" href="/assets/keentool-ui.css?v=1.0.0">
 <script defer src="/assets/keentool-ui.js?v=1.0.0"></script>
 <script>if(location.hash==='#security')location.replace('/security/index.html');</script>
-<script defer src="/assets/keentool-security.js?v=1.0.0"></script>
+<script defer src="/assets/keentool-security.js?v=1.0.1"></script>
 </head>
 <body class="kt-ui" data-kt-page="firewall">
     <dialog id="admin_dialog" style="border:1px solid #ddd;border-radius:10px;max-width:360px">
@@ -475,6 +475,7 @@
         <button class="main-tab-btn" onclick="showMainTab('history')">Traffic History</button>
     </div>
 
+    <p id="history_precision" class="kt-history-note" hidden style="color:var(--text-gray);font-size:12px;line-height:1.5;margin:12px 0"></p>
     <div id="view_sources" class="view-section active">
         <div class="section-header-wrapper">
             <div class="section-title">Top Threats & Targets</div>
@@ -649,7 +650,7 @@
         </div>
     </div>
 
-    <footer class="kt-page-footer">&copy; <span id="year" data-kt-year>2026</span> mattheweli <span class="kt-footer-meta">Uptime: <span id="uptime">-</span></span><span class="kt-footer-meta">Firewall Dashboard 2.0.0</span></footer>
+    <footer class="kt-page-footer">&copy; <span id="year" data-kt-year>2026</span> mattheweli <span class="kt-footer-meta">Uptime: <span id="uptime">-</span></span><span class="kt-footer-meta">Firewall Dashboard 2.0.1</span></footer>
     
     <script>
 	
@@ -926,6 +927,8 @@
         function renderDashboard() {
             if (typeof window.FW_DATA !== 'undefined') {
                 const d = window.FW_DATA;
+                const historyNote=document.getElementById("history_precision");
+                if(historyNote){historyNote.textContent=d.history?.note||"";historyNote.hidden=!historyNote.textContent;}
                 const setDiff = (elId, val) => { 
                     const el = document.getElementById(elId); 
                     if(!val || val==='0' || val==='=0' || val==='+0' || val==='-0'){ 
