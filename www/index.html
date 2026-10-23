@@ -1,4 +1,21 @@
-<!-- Firewall Dashboard v2.0.0 -->
+<!-- Changelog 2.0.0: uniform numeric presentation and refreshed shared layout. -->
+<!-- Changelog 2.0.0: shared topbar refresh replaces independent page refresh controls. -->
+<!-- Changelog 2.0.0: navigation to the protected Settings page. -->
+<!-- Changelog 2.0.0: refresh shared diagnostics and blocklist detail handling. -->
+<!-- Changelog 2.0.0: shared readable tables, density preference, restrained colors and uniform controls. -->
+<!-- Changelog 2.0.0: align numeric Traffic History headers and cells despite shared theme heading defaults; keep history values on one line. -->
+<!-- Changelog 2.0.0: align geographic column headings and panel edges; uniform automatic-year copyright footer. -->
+<!-- Changelog 2.0.0: complete country aggregates, blue logarithmic map/legend, top countries, public source details, zoom/reset/fullscreen and unknown-location coverage. -->
+<!-- Changelog 2.0.0: match +N port buttons and visible port badges in font size, weight and line height. -->
+<!-- Changelog 2.0.0: clickable +N targeted-port lists with full read-only preview, copy and download. -->
+<!-- Changelog 2.0.0: status LED reflects full owned-rule verification for both families. -->
+<!-- Changelog 2.0.0: admin-only quick unban, firewall status LED/FW Enable label and dot-grouped counters. -->
+<!-- Changelog 2.0.0: intrinsic numeric column widths; CNT/HITS stay on one line without digit splitting. -->
+<!-- Changelog 2.0.0: cleaner decorative icons, consistent typography/colors and shared log terminal. -->
+<!-- Changelog 2.0.0: full-width layout, collapsible navigation and chart resize. -->
+<!-- Changelog 2.0.0: shared Keenetic-inspired navigation/theme, responsive controls and readable monitoring. -->
+<!-- Firewall Dashboard v2.0.0 | Stable release -->
+<!-- Changelog 2.0.0: English source comments and interface messages. -->
 
 <!DOCTYPE html>
 <html lang="en">
@@ -6,7 +23,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Keenetic Firewall Stats</title>
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🛡️</text></svg>">
+    <link rel="icon" type="image/svg+xml" href="/assets/keentool.svg?v=1.0.0">
     <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap" rel="stylesheet">
     <style>
         :root { 
@@ -148,7 +165,8 @@
         .tables-grid { display: grid; grid-template-columns: 1fr; gap: 24px; margin-bottom: 24px; } 
         @media(min-width: 900px) { .tables-grid { grid-template-columns: 1fr 1fr; } }
         .triple-grid { display: grid; grid-template-columns: 1fr; gap: 24px; }
-        @media(min-width: 1200px) { .triple-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+        @media(min-width: 1400px) { .triple-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+        @media(min-width: 1900px) { .triple-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
         
         .sub-header { font-size: 12px; text-transform: uppercase; color: var(--primary-text); font-weight: 500; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--stroke); }
         .table-container { background: var(--background); border-radius: 8px; box-shadow: var(--box-shadow-1); border: 1px solid var(--dashboard-card-border); overflow-x: auto; -webkit-overflow-scrolling: touch; }
@@ -164,7 +182,7 @@
         #view_history tbody tr { height: auto; }
         
         /* Force alignment for the numbers */
-        .num { text-align: right; font-variant-numeric: tabular-nums; font-weight: 500; }
+        .kt-ui th.num, .kt-ui td.num { text-align: right; font-variant-numeric: tabular-nums; font-weight: 500; }
         
         .meta { font-size: 13px; color: var(--text-gray); line-height: 1.4; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .meta small { display: block; font-size: 12px; font-weight: 400; opacity: 0.8; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-height: 15px;}
@@ -178,15 +196,15 @@
         a { color: var(--link); text-decoration: none; font-weight: 400; transition: text-decoration 0.2s; }
         a:hover { text-decoration: underline; }
         
-        .list-badge { font-size: 10px; padding: 2px 6px; border-radius: 4px; margin-left: 6px; text-transform: uppercase; font-weight: 500; border: 1px solid currentColor; white-space: nowrap; display: inline-block; }
+        .kt-ui .list-badge { font-family: inherit; font-size: 10px; line-height: 1.5; padding: 2px 6px; border-radius: 4px; margin-left: 6px; text-transform: uppercase; font-weight: 500; border: 1px solid currentColor; white-space: nowrap; display: inline-block; }
         .lb-main { color: var(--red); background: rgba(220,53,69,0.05); }
         .lb-v6 { color: var(--purple); background: rgba(111,66,193,0.05); }
         .lb-vpn { color: var(--orange); background: rgba(253,126,20,0.05); }
         .lb-trap { color: var(--primary-text); background: var(--dashboard-background); }
         .lb-exp { color: var(--text-gray); border-color: var(--stroke); }
 		.lb-geo { color: #00bcd4; background: rgba(0, 188, 212, 0.05); }
-		/* Force History Headers to be bold and primary color (black) */
-        #view_history th { color: var(--primary-text) !important; font-weight: 800 !important; font-size: 11.5px !important; }
+		/* Keep history labels readable without overriding shared table typography. */
+        .kt-ui #view_history th { color: var(--primary-text); font-weight: 500; font-size: 12px; }
 		#view_history td:last-child { font-weight: 700; }
         .col-geo { color: #00bcd4; }
 		
@@ -212,6 +230,9 @@
         .log-meta { font-size: 12px; color: var(--text-gray); margin-left: 8px; font-weight: 400; text-transform: none;}
 		
 
+        .port-more { cursor: pointer; background: var(--th-bg); color: var(--primary-color); font-family: inherit; }
+        .port-more:hover { border-color: var(--primary-color); }
+        .port-more:focus-visible { outline: 2px solid var(--primary-color); outline-offset: 2px; }
         /* MODAL STYLES */
         .modal { display: none; position: fixed; z-index: 1000; left: 0; top: 0; width: 100%; height: 100%; overflow: auto; background-color: rgba(0,0,0,0.4); backdrop-filter: blur(2px); }
         .modal-content { background-color: var(--background); margin: 8% auto; padding: 24px; border-radius: 8px; width: 90%; max-width: 500px; box-shadow: 0 10px 30px rgba(0,0,0,0.2); border: 1px solid var(--stroke); animation: slideIn 0.2s ease-out; }
@@ -225,66 +246,127 @@
         .btn-action { padding: 6px 16px; border-radius: 4px; border: 1px solid var(--stroke); background: transparent; color: var(--primary-text); cursor: pointer; font-size: 13px; font-weight: 500; font-family: inherit; transition: all 0.2s; }
         .btn-action:hover { border-color: var(--primary-color); color: var(--primary-color); }
         
+        .kt-ui #view_history th, .kt-ui #view_history td { white-space: nowrap; }
         .footer { text-align: center; font-size: 12px; color: var(--text-gray); margin-top: 40px; }
 		
 		.geo-tab-content { display: none; } .geo-tab-content.active { display: block; }
+            [data-admin-only][hidden] { display: none !important; }
+
+        /* Numeric counters must never split digits or be clipped by narrow headers. */
+        .kt-ui table.kt-count-first th:first-child,
+        .kt-ui table.kt-count-first td:first-child,
+        .kt-ui table.kt-hits-last th:last-child,
+        .kt-ui table.kt-hits-last td:last-child {
+            width: 1%; min-width: 7ch; white-space: nowrap;
+            word-break: normal; overflow-wrap: normal; text-align: right;
+            padding-left: 12px; padding-right: 12px;
+            font-variant-numeric: tabular-nums;
+        }
+        .kt-ui table.kt-count-first,
+        .kt-ui table.kt-hits-last { table-layout: auto; }
+
+        /* Hide quick actions in old cached table exports as well as new exports. */
+        body:not(.kt-admin-authenticated) a[onclick^="unbanIP("] { display: none !important; }
+        .kt-fw-indicator { display: inline-flex; align-items: center; gap: 8px; }
+        .kt-fw-led { width: 8px; height: 8px; border-radius: 50%; background: var(--stroke); }
+        .kt-fw-led.is-on { background: #14965d; }
+        .kt-ui #loading_dot { display: none; }
+            /* Geographic counter overview, shared by all period tabs. */
+        .kt-ui { --map-base:#edf0f3; --map-stroke:#c1cbd2; --map-min:#d6eef9; --map-max:#00689d; --map-hover:#0097dc; }
+        @media(prefers-color-scheme:dark){.kt-ui{--map-base:#304158;--map-stroke:#516378;--map-min:#354e67;--map-max:#77caff;--map-hover:#b0e4ff}}
+        .geo-layout{display:grid;grid-template-columns:minmax(260px,1fr) minmax(0,2fr);gap:24px;align-items:stretch}
+        #map_master{min-width:0}
+        .geo-layout > div > .sub-header{display:flex;align-items:center;min-height:42px;box-sizing:border-box}
+        .geo-layout > #map_master > .map-panel{flex:1}
+        .geo-layout > div > .table-container{min-height:0}
+        .map-ranking-heading{display:flex;justify-content:space-between;gap:12px;color:var(--text-gray);font-size:11px;padding:0 4px 8px;border-bottom:1px solid var(--table-border)}
+        #map_master:fullscreen{padding:24px;overflow:auto;background:var(--dashboard-background);height:100vh!important;display:block!important}
+        .map-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+        .map-actions{display:flex;gap:8px}
+        .kt-ui .map-actions button,.kt-ui #map_unknown{border:1px solid var(--stroke);border-radius:3px;background:var(--background);color:var(--primary-color);padding:5px 9px;font-size:12px;cursor:pointer}
+        .map-panel{background:var(--background);border:1px solid var(--ui-card-border);border-radius:8px;padding:16px}
+        .map-content{display:grid;grid-template-columns:minmax(0,1fr) 230px;gap:16px}
+        #map_canvas{height:clamp(300px,30vw,520px);width:100%}
+        #map_master:fullscreen #map_canvas{height:60vh}
+        #map_canvas .jvm-zoom-btn{background:var(--primary-color);color:var(--background);border-radius:3px}
+        #map_canvas path[data-code]{cursor:pointer;transition:fill .15s}
+        #map_canvas path[data-code]:hover,#map_canvas path[data-code].map-selected,#map_canvas path[data-code]:focus-visible{fill:var(--map-hover)!important;stroke:var(--primary-text);stroke-width:1.2}
+        .map-ranking{margin:0;padding:0;list-style:none}
+        .kt-ui button.map-country{position:relative;isolation:isolate;display:flex;justify-content:space-between;gap:12px;align-items:center;width:100%;text-align:left;border:0;border-bottom:1px solid var(--table-border);border-radius:0;padding:9px 4px;background:transparent;color:var(--primary-text);font-size:12px;cursor:pointer}
+        .map-country:before{content:'';position:absolute;inset:auto auto 0 0;width:var(--country-share);height:2px;background:var(--primary-color);opacity:.45}
+        .map-country span:last-child{white-space:nowrap;font-variant-numeric:tabular-nums}
+        .map-caption{color:var(--text-gray);font-size:12px;margin:10px 0}
+        .map-legend{display:flex;gap:10px;align-items:center;flex-wrap:wrap;font-size:12px;color:var(--text-gray);margin-top:12px}
+        .map-gradient{display:inline-block;width:140px;height:9px;border-radius:3px;background:linear-gradient(to right,color-mix(in srgb,var(--map-max) 20%,var(--map-min)),var(--map-max))}
+        .map-no-data{display:inline-block;width:12px;height:12px;background:var(--map-base);border:1px solid var(--map-stroke);vertical-align:middle;margin-right:4px}
+        #map_details{margin-top:16px;border-top:1px solid var(--table-border);padding-top:16px}
+        #map_details .table-container{max-height:350px}
+        #map_details td:nth-child(2),#map_details th:nth-child(2){text-align:right;white-space:nowrap}
+        #map_details td{overflow-wrap:anywhere}
+        #map_details_title{font-size:14px;font-weight:500}
+        @media(max-width:1200px){.geo-layout{grid-template-columns:1fr}.map-content{grid-template-columns:minmax(0,1fr) 230px}}
+        @media(max-width:650px){.map-content{grid-template-columns:1fr}#map_canvas{height:300px}.map-actions{flex-wrap:wrap}}
+
     </style>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/jsvectormap/dist/css/jsvectormap.min.css" />
     <script src="https://cdn.jsdelivr.net/npm/jsvectormap"></script>
     <script src="https://cdn.jsdelivr.net/npm/jsvectormap/dist/maps/world.js"></script>
+<script src="/assets/keentool-format.js?v=1.0.0"></script>
+<link rel="stylesheet" href="/assets/keentool-ui.css?v=1.0.0">
+<script defer src="/assets/keentool-ui.js?v=1.0.0"></script>
+<script>if(location.hash==='#security')location.replace('/security/index.html');</script>
+<script defer src="/assets/keentool-security.js?v=1.0.0"></script>
 </head>
-<body>
+<body class="kt-ui" data-kt-page="firewall">
+    <dialog id="admin_dialog" style="border:1px solid #ddd;border-radius:10px;max-width:360px">
+      <form id="admin_login_form">
+        <h3>Administrator access</h3>
+        <p><label>Password <input id="admin_password" type="password" required autocomplete="current-password" maxlength="72"></label></p>
+        <p id="admin_login_error" role="alert" style="color:#b42318"></p>
+        <button type="submit" class="btn-action">Log in</button>
+        <button type="button" class="btn-action" onclick="document.getElementById('admin_dialog').close()">Cancel</button>
+      </form>
+    </dialog>
     <div class="header">
         <h1>
             <a href="../index.html" class="btn-home" title="Back to Dashboard">🏠</a>
             Keenetic Firewall Stats
         </h1>
         <div class="header-controls">
+            <span id="admin_state">Read-only</span>
+            <button class="btn-action" id="admin_login_button" onclick="openAdminLogin()">Admin login</button>
+            <button class="btn-action" id="admin_logout_button" onclick="adminLogout()" hidden>Log out</button>
 			<div class="fw-status-label">
-                Tracking:
+                FW Enable:
                 <label class="switch" title="Enable/Disable Global Firewall">
-                    <input type="checkbox" id="fw_toggle" onchange="toggleFirewall(this)">
+                    <input type="checkbox" disabled data-admin-write id="fw_toggle" onchange="toggleFirewall(this)">
                     <span class="slider"></span>
                 </label>
             </div>
+            <span class="kt-fw-indicator"><span id="fw_rules_led" class="kt-fw-led" aria-hidden="true"></span><span id="fw_protection_state" class="kt-list-note" role="status">Checking firewall…</span></span>
             <div id="loading_dot" class="update-dot"></div>
-            <div class="refresh-wrapper">
-                <select id="refresh_timer" class="refresh-select" onchange="changeRefreshRate(this.value)">
-                    <option value="0">Auto-Refresh: OFF</option>
-                    <optgroup label="Seconds">
-                        <option value="5000">5 sec</option>
-                        <option value="10000">10 sec</option>
-                    </optgroup>
-                    <optgroup label="Minutes">
-                        <option value="60000">1 min</option>
-                        <option value="300000">5 min</option>
-                        <option value="900000">15 min</option>
-                        <option value="1800000">30 min</option>
-                    </optgroup>
-                    <optgroup label="Hours">
-                        <option value="3600000">1 hour</option>
-                    </optgroup>
-                </select>
-                <span class="refresh-arrow">▼</span>
-            </div>
             <div class="clock-badge">Updated: <span id="last_update_header">-</span></div>
         </div>
     </div>
-	<div class="card" style="margin-bottom: 24px; flex-direction: row; flex-wrap: wrap; justify-content: space-between; align-items: center; min-height: auto; padding: 12px 24px;">
+	<div class="card" id="ip_control_panel" data-admin-only hidden style="margin-bottom: 24px; flex-direction: row; flex-wrap: wrap; justify-content: space-between; align-items: center; min-height: auto; padding: 12px 24px;">
         <div class="section-title" style="margin-bottom: 0;">Quick IP Control</div>
         <div style="display: flex; gap: 10px; flex-wrap: wrap; flex: 1; max-width: 600px; margin-left: 20px;">
-            <input type="text" id="ip_input" placeholder="enter IPv4 or IPv6 address" style="padding: 8px; border-radius: 4px; border: 1px solid var(--stroke); flex: 1; min-width: 150px; background: var(--background); color: var(--primary-text);">
-            <button class="btn-action" onclick="lookupIP()">Check</button>
-            <button class="btn-action" style="color: var(--red); border-color: var(--red);" onclick="banIP()">Ban</button>
-            <button class="btn-action" style="color: var(--green); border-color: var(--green);" onclick="unbanIP(document.getElementById('ip_input').value)">Unban</button>
+            <input type="text" id="ip_input" placeholder="IPv4 / IPv6 address or CIDR" style="padding: 8px; border-radius: 4px; border: 1px solid var(--stroke); flex: 1; min-width: 150px; background: var(--background); color: var(--primary-text);">
+            <select class="refresh-select" id="manual_duration" aria-label="Ban duration"><option value="900">15 minutes</option><option value="3600" selected>1 hour</option><option value="86400">24 hours</option><option value="0">Permanent</option></select>
+            <input id="manual_note" maxlength="200" aria-label="Private ban note" placeholder="Optional private note">
+            <button class="btn-action" onclick="lookupIP()">Explain</button>
+            <button class="btn-action" style="color: var(--red); border-color: var(--red);" data-admin-write disabled onclick="banIP()">Ban</button>
+            <button class="btn-action" style="color: var(--green); border-color: var(--green);" data-admin-write disabled onclick="unbanIP(document.getElementById('ip_input').value)">Unban</button>
         </div>
         <div id="ip_status_result" style="width: 100%; margin-top: 10px; font-size: 13px; font-weight: bold;"></div>
     </div>
+    <p class="kt-list-note">Current list entries · IPv4 / IPv6 counts. Change badges refer to the last list update; lifetime drops count blocked packets.</p>
+    <div id="policy_guard" class="security-guard" hidden><span id="policy_guard_text"></span> <b id="policy_guard_countdown"></b><div data-admin-only hidden><button type="button" class="btn-action" onclick="confirmPolicy()">Confirm working connection</button><button type="button" class="btn-action" onclick="rollbackPolicy()">Restore previous policy</button></div></div>
     <div class="grid-cards">
         <div class="card">
-            <h3>🌐 Internet Blocklists</h3>
+            <h3>Internet Blocklists</h3>
             <div>
-                <span class="val" style="color:var(--red)" id="size_main_total">-</span>
+                <span class="val" style="color:var(--primary-color)" id="size_main_total">-</span>
                 <div style="display: grid; grid-template-columns: 18px max-content auto; gap: 4px 10px; font-size:12px; color:var(--text-gray); margin-top:8px; align-items: center;">
                     <span>v4:</span>
                     <b style="color:var(--primary-text); text-align:right;" id="size_main">-</b>
@@ -299,9 +381,9 @@
         </div>
 
         <div class="card">
-            <h3>🛑 Manual Blocklists</h3>
+            <h3>Manual Blocklists</h3>
             <div>
-                <span class="val" style="color:var(--purple)" id="size_manual_total">-</span>
+                <span class="val" style="color:var(--primary-color)" id="size_manual_total">-</span>
                 <div style="display: grid; grid-template-columns: 18px max-content auto; gap: 4px 10px; font-size:12px; color:var(--text-gray); margin-top:8px; align-items: center;">
                     <span>v4:</span>
                     <b style="color:var(--primary-text); text-align:right;" id="size_manual">-</b>
@@ -318,16 +400,16 @@
         <div class="card">
             <h3>VPN Blocklist</h3>
             <div style="display:flex; align-items:center;">
-                <span class="val" style="color:var(--orange)" id="size_vpn">-</span>
+                <span class="val" style="color:var(--primary-color)" id="size_vpn">-</span>
                 <span id="diff_vpn"></span>
             </div>
             <div class="time-since" id="time_vpn"></div>
         </div>
 
         <div class="card">
-            <h3>🪤 Auto-Ban Trap</h3>
+            <h3>Auto-Ban Trap</h3>
             <div>
-                <span class="val" style="color:var(--dark)" id="size_trap_total">-</span>
+                <span class="val" style="color:var(--primary-color)" id="size_trap_total">-</span>
                 <div style="display: grid; grid-template-columns: 18px max-content auto; gap: 4px 10px; font-size:12px; color:var(--text-gray); margin-top:8px; align-items: center;">
                     <span>v4:</span>
                     <b style="color:var(--primary-text); text-align:right;" id="size_trap">-</b>
@@ -342,9 +424,9 @@
         </div>
 
         <div class="card">
-            <h3>🌍 Geo-IP Blocklist</h3>
+            <h3>Geo-IP Blocklist</h3>
             <div>
-                <span class="val" style="color:#00bcd4" id="size_geo_total">-</span>
+                <span class="val" style="color:var(--primary-color)" id="size_geo_total">-</span>
                 <div style="display: grid; grid-template-columns: 18px max-content auto; gap: 4px 10px; font-size:12px; color:var(--text-gray); margin-top:8px; align-items: center;">
                     <span>v4:</span>
                     <b style="color:var(--primary-text); text-align:right;" id="size_geo">-</b>
@@ -368,15 +450,21 @@
         <details id="details_ulogd" ontoggle="toggleUlogd(this)">
             <summary>
                 <div class="log-title">
-                    <span>🔥 Live ULOGD Firewall</span>
+                    <span>Live ULOGD Firewall</span>
                     <span id="size_ulogd" class="log-meta"></span>
                 </div>
                 <div class="log-controls">
-                    <button class="btn-log" onclick="downloadUlogd(event)">Save to file</button>
-                    <button class="btn-log" onclick="fetchUlogd(true, event)">Refresh</button>
+                    <button class="btn-log" onclick="downloadUlogd(event)">Save visible log</button>
                     <span style="color:var(--stroke); font-size:10px;">▼</span>
                 </div>
             </summary>
+            <div class="kt-log-tools">
+                <input type="search" id="ulogd_search" aria-label="Search firewall log" placeholder="Search IP, port or text" title="Filter the last 1,000 loaded lines" oninput="filterUlogd()">
+                <select id="ulogd_protocol" aria-label="Filter protocol" onchange="filterUlogd()"><option value="all">All protocols</option><option value="tcp">TCP</option><option value="udp">UDP</option><option value="icmp">ICMP</option></select>
+                <label><input type="checkbox" id="ulogd_pause"> Pause updates</label>
+                <label><input type="checkbox" id="ulogd_follow" checked> Follow latest</label>
+                <span id="ulogd_filter_count" class="kt-list-note"></span>
+            </div>
             <div class="log-viewer" id="content_ulogd">Click to load the live log...</div>
         </details>
     </div>
@@ -400,53 +488,53 @@
         
         <div id="tab_24h" class="tab-content active">
             <div class="triple-grid">
-                <div><div class="sub-header">Honeypot Victims</div><div class="table-container"><table><thead><tr><th style="width:60px">Cnt</th><th>Source</th><th>Info</th></tr></thead><tbody id="tb_trap_24h"></tbody></table></div></div>
-                <div><div class="sub-header">Static Blocks</div><div class="table-container"><table><thead><tr><th style="width:60px">Cnt</th><th>Source</th><th>Info</th></tr></thead><tbody id="tb_other_24h"></tbody></table></div></div>
-                <div><div class="sub-header">Top Active Subnets</div><div class="table-container"><table><thead><tr><th style="width:60px">Cnt</th><th>Subnet</th><th>Info</th></tr></thead><tbody id="tb_nets_24h"></tbody></table></div></div>
+                <div><div class="sub-header">Honeypot Victims</div><div class="table-container"><table class="kt-count-first"><thead><tr><th>Cnt</th><th>Source</th><th>Info</th></tr></thead><tbody id="tb_trap_24h"></tbody></table></div></div>
+                <div><div class="sub-header">Static Blocks</div><div class="table-container"><table class="kt-count-first"><thead><tr><th>Cnt</th><th>Source</th><th>Info</th></tr></thead><tbody id="tb_other_24h"></tbody></table></div></div>
+                <div><div class="sub-header">Top Active Subnets</div><div class="table-container"><table class="kt-count-first"><thead><tr><th>Cnt</th><th>Subnet</th><th>Info</th></tr></thead><tbody id="tb_nets_24h"></tbody></table></div></div>
             </div>
             <div class="triple-grid" style="margin-top:24px;">
-                <div><div class="sub-header">Global Targeted Ports</div><div class="table-container"><table><thead><tr><th style="width:60px">Port</th><th>Top Attackers</th><th class="num" style="width:60px">Hits</th></tr></thead><tbody id="tb_ports_24h"></tbody></table></div></div>
-                <div><div class="sub-header">Honeypot/Brute Ports</div><div class="table-container"><table><thead><tr><th style="width:60px">Port</th><th>Top Attackers</th><th class="num" style="width:60px">Hits</th></tr></thead><tbody id="tb_brute_24h"></tbody></table></div></div>
-                <div><div class="sub-header">IPv6 Top Hitters</div><div class="table-container"><table><thead><tr><th style="width:60px">Cnt</th><th>Source</th><th>Info</th></tr></thead><tbody id="tb_ipv6_24h"></tbody></table></div></div>
+                <div><div class="sub-header">Global Targeted Ports</div><div class="table-container"><table class="kt-hits-last"><thead><tr><th style="width:60px">Port</th><th>Top Attackers</th><th class="num">Hits</th></tr></thead><tbody id="tb_ports_24h"></tbody></table></div></div>
+                <div><div class="sub-header">Honeypot/Brute Ports</div><div class="table-container"><table class="kt-hits-last"><thead><tr><th style="width:60px">Port</th><th>Top Attackers</th><th class="num">Hits</th></tr></thead><tbody id="tb_brute_24h"></tbody></table></div></div>
+                <div><div class="sub-header">IPv6 Top Hitters</div><div class="table-container"><table class="kt-count-first"><thead><tr><th>Cnt</th><th>Source</th><th>Info</th></tr></thead><tbody id="tb_ipv6_24h"></tbody></table></div></div>
             </div>
         </div>
 
         <div id="tab_30d" class="tab-content">
             <div class="triple-grid">
-                <div><div class="sub-header">Honeypot Victims</div><div class="table-container"><table><thead><tr><th style="width:60px">Cnt</th><th>Source</th><th>Info</th></tr></thead><tbody id="tb_trap_30d"></tbody></table></div></div>
-                <div><div class="sub-header">Static Blocks</div><div class="table-container"><table><thead><tr><th style="width:60px">Cnt</th><th>Source</th><th>Info</th></tr></thead><tbody id="tb_other_30d"></tbody></table></div></div>
-                <div><div class="sub-header">Top Active Subnets</div><div class="table-container"><table><thead><tr><th style="width:60px">Cnt</th><th>Subnet</th><th>Info</th></tr></thead><tbody id="tb_nets_30d"></tbody></table></div></div>
+                <div><div class="sub-header">Honeypot Victims</div><div class="table-container"><table class="kt-count-first"><thead><tr><th>Cnt</th><th>Source</th><th>Info</th></tr></thead><tbody id="tb_trap_30d"></tbody></table></div></div>
+                <div><div class="sub-header">Static Blocks</div><div class="table-container"><table class="kt-count-first"><thead><tr><th>Cnt</th><th>Source</th><th>Info</th></tr></thead><tbody id="tb_other_30d"></tbody></table></div></div>
+                <div><div class="sub-header">Top Active Subnets</div><div class="table-container"><table class="kt-count-first"><thead><tr><th>Cnt</th><th>Subnet</th><th>Info</th></tr></thead><tbody id="tb_nets_30d"></tbody></table></div></div>
             </div>
             <div class="triple-grid" style="margin-top:24px;">
-                <div><div class="sub-header">Global Targeted Ports</div><div class="table-container"><table><thead><tr><th style="width:60px">Port</th><th>Top Attackers</th><th class="num" style="width:60px">Hits</th></tr></thead><tbody id="tb_ports_30d"></tbody></table></div></div>
-                <div><div class="sub-header">Honeypot/Brute Ports</div><div class="table-container"><table><thead><tr><th style="width:60px">Port</th><th>Top Attackers</th><th class="num" style="width:60px">Hits</th></tr></thead><tbody id="tb_brute_30d"></tbody></table></div></div>
-                <div><div class="sub-header">IPv6 Top Hitters</div><div class="table-container"><table><thead><tr><th style="width:60px">Cnt</th><th>Source</th><th>Info</th></tr></thead><tbody id="tb_ipv6_30d"></tbody></table></div></div>
+                <div><div class="sub-header">Global Targeted Ports</div><div class="table-container"><table class="kt-hits-last"><thead><tr><th style="width:60px">Port</th><th>Top Attackers</th><th class="num">Hits</th></tr></thead><tbody id="tb_ports_30d"></tbody></table></div></div>
+                <div><div class="sub-header">Honeypot/Brute Ports</div><div class="table-container"><table class="kt-hits-last"><thead><tr><th style="width:60px">Port</th><th>Top Attackers</th><th class="num">Hits</th></tr></thead><tbody id="tb_brute_30d"></tbody></table></div></div>
+                <div><div class="sub-header">IPv6 Top Hitters</div><div class="table-container"><table class="kt-count-first"><thead><tr><th>Cnt</th><th>Source</th><th>Info</th></tr></thead><tbody id="tb_ipv6_30d"></tbody></table></div></div>
             </div>
         </div>
 
         <div id="tab_1y" class="tab-content">
             <div class="triple-grid">
-                <div><div class="sub-header">Honeypot Victims</div><div class="table-container"><table><thead><tr><th style="width:60px">Cnt</th><th>Source</th><th>Info</th></tr></thead><tbody id="tb_trap_1y"></tbody></table></div></div>
-                <div><div class="sub-header">Static Blocks</div><div class="table-container"><table><thead><tr><th style="width:60px">Cnt</th><th>Source</th><th>Info</th></tr></thead><tbody id="tb_other_1y"></tbody></table></div></div>
-                <div><div class="sub-header">Top Active Subnets</div><div class="table-container"><table><thead><tr><th style="width:60px">Cnt</th><th>Subnet</th><th>Info</th></tr></thead><tbody id="tb_nets_1y"></tbody></table></div></div>
+                <div><div class="sub-header">Honeypot Victims</div><div class="table-container"><table class="kt-count-first"><thead><tr><th>Cnt</th><th>Source</th><th>Info</th></tr></thead><tbody id="tb_trap_1y"></tbody></table></div></div>
+                <div><div class="sub-header">Static Blocks</div><div class="table-container"><table class="kt-count-first"><thead><tr><th>Cnt</th><th>Source</th><th>Info</th></tr></thead><tbody id="tb_other_1y"></tbody></table></div></div>
+                <div><div class="sub-header">Top Active Subnets</div><div class="table-container"><table class="kt-count-first"><thead><tr><th>Cnt</th><th>Subnet</th><th>Info</th></tr></thead><tbody id="tb_nets_1y"></tbody></table></div></div>
             </div>
             <div class="triple-grid" style="margin-top:24px;">
-                <div><div class="sub-header">Global Targeted Ports</div><div class="table-container"><table><thead><tr><th style="width:60px">Port</th><th>Top Attackers</th><th class="num" style="width:60px">Hits</th></tr></thead><tbody id="tb_ports_1y"></tbody></table></div></div>
-                <div><div class="sub-header">Honeypot/Brute Ports</div><div class="table-container"><table><thead><tr><th style="width:60px">Port</th><th>Top Attackers</th><th class="num" style="width:60px">Hits</th></tr></thead><tbody id="tb_brute_1y"></tbody></table></div></div>
-                <div><div class="sub-header">IPv6 Top Hitters</div><div class="table-container"><table><thead><tr><th style="width:60px">Cnt</th><th>Source</th><th>Info</th></tr></thead><tbody id="tb_ipv6_1y"></tbody></table></div></div>
+                <div><div class="sub-header">Global Targeted Ports</div><div class="table-container"><table class="kt-hits-last"><thead><tr><th style="width:60px">Port</th><th>Top Attackers</th><th class="num">Hits</th></tr></thead><tbody id="tb_ports_1y"></tbody></table></div></div>
+                <div><div class="sub-header">Honeypot/Brute Ports</div><div class="table-container"><table class="kt-hits-last"><thead><tr><th style="width:60px">Port</th><th>Top Attackers</th><th class="num">Hits</th></tr></thead><tbody id="tb_brute_1y"></tbody></table></div></div>
+                <div><div class="sub-header">IPv6 Top Hitters</div><div class="table-container"><table class="kt-count-first"><thead><tr><th>Cnt</th><th>Source</th><th>Info</th></tr></thead><tbody id="tb_ipv6_1y"></tbody></table></div></div>
             </div>
         </div>
 
         <div id="tab_all" class="tab-content">
             <div class="triple-grid">
-                <div><div class="sub-header">Honeypot Victims</div><div class="table-container"><table><thead><tr><th style="width:60px">Cnt</th><th>Source</th><th>Info</th></tr></thead><tbody id="tb_trap_all"></tbody></table></div></div>
-                <div><div class="sub-header">Static Blocks</div><div class="table-container"><table><thead><tr><th style="width:60px">Cnt</th><th>Source</th><th>Info</th></tr></thead><tbody id="tb_other_all"></tbody></table></div></div>
-                <div><div class="sub-header">Top Active Subnets</div><div class="table-container"><table><thead><tr><th style="width:60px">Cnt</th><th>Subnet</th><th>Info</th></tr></thead><tbody id="tb_nets_all"></tbody></table></div></div>
+                <div><div class="sub-header">Honeypot Victims</div><div class="table-container"><table class="kt-count-first"><thead><tr><th>Cnt</th><th>Source</th><th>Info</th></tr></thead><tbody id="tb_trap_all"></tbody></table></div></div>
+                <div><div class="sub-header">Static Blocks</div><div class="table-container"><table class="kt-count-first"><thead><tr><th>Cnt</th><th>Source</th><th>Info</th></tr></thead><tbody id="tb_other_all"></tbody></table></div></div>
+                <div><div class="sub-header">Top Active Subnets</div><div class="table-container"><table class="kt-count-first"><thead><tr><th>Cnt</th><th>Subnet</th><th>Info</th></tr></thead><tbody id="tb_nets_all"></tbody></table></div></div>
             </div>
             <div class="triple-grid" style="margin-top:24px;">
-                <div><div class="sub-header">Global Targeted Ports</div><div class="table-container"><table><thead><tr><th style="width:60px">Port</th><th>Top Attackers</th><th class="num" style="width:60px">Hits</th></tr></thead><tbody id="tb_ports_all"></tbody></table></div></div>
-                <div><div class="sub-header">Honeypot/Brute Ports</div><div class="table-container"><table><thead><tr><th style="width:60px">Port</th><th>Top Attackers</th><th class="num" style="width:60px">Hits</th></tr></thead><tbody id="tb_brute_all"></tbody></table></div></div>
-                <div><div class="sub-header">IPv6 Top Hitters</div><div class="table-container"><table><thead><tr><th style="width:60px">Cnt</th><th>Source</th><th>Info</th></tr></thead><tbody id="tb_ipv6_all"></tbody></table></div></div>
+                <div><div class="sub-header">Global Targeted Ports</div><div class="table-container"><table class="kt-hits-last"><thead><tr><th style="width:60px">Port</th><th>Top Attackers</th><th class="num">Hits</th></tr></thead><tbody id="tb_ports_all"></tbody></table></div></div>
+                <div><div class="sub-header">Honeypot/Brute Ports</div><div class="table-container"><table class="kt-hits-last"><thead><tr><th style="width:60px">Port</th><th>Top Attackers</th><th class="num">Hits</th></tr></thead><tbody id="tb_brute_all"></tbody></table></div></div>
+                <div><div class="sub-header">IPv6 Top Hitters</div><div class="table-container"><table class="kt-count-first"><thead><tr><th>Cnt</th><th>Source</th><th>Info</th></tr></thead><tbody id="tb_ipv6_all"></tbody></table></div></div>
             </div>
         </div>
     </div> 
@@ -462,40 +550,40 @@
         </div>
         
         <div id="tab_g_24h" class="geo-tab-content active">
-            <div style="display: grid; grid-template-columns: 1fr 2fr; gap: 24px; align-items: stretch;">
+            <div class="geo-layout">
                 <div style="display: flex; flex-direction: column;">
                     <div class="sub-header">GeoIP Subnets</div>
-                    <div class="table-container" style="flex: 1;"><table><thead><tr><th style="width:60px">Cnt</th><th>Subnet</th><th>Info</th></tr></thead><tbody id="tb_geo_24h"></tbody></table></div>
+                    <div class="table-container" style="flex: 1;"><table class="kt-count-first"><thead><tr><th>Cnt</th><th>Subnet</th><th>Info</th></tr></thead><tbody id="tb_geo_24h"></tbody></table></div>
                 </div>
                 <div id="globe_slot_24h" style="display: flex; flex-direction: column;"></div>
             </div>
         </div>
         
         <div id="tab_g_30d" class="geo-tab-content">
-            <div style="display: grid; grid-template-columns: 1fr 2fr; gap: 24px; align-items: stretch;">
+            <div class="geo-layout">
                 <div style="display: flex; flex-direction: column;">
                     <div class="sub-header">GeoIP Subnets</div>
-                    <div class="table-container" style="flex: 1;"><table><thead><tr><th style="width:60px">Cnt</th><th>Subnet</th><th>Info</th></tr></thead><tbody id="tb_geo_30d"></tbody></table></div>
+                    <div class="table-container" style="flex: 1;"><table class="kt-count-first"><thead><tr><th>Cnt</th><th>Subnet</th><th>Info</th></tr></thead><tbody id="tb_geo_30d"></tbody></table></div>
                 </div>
                 <div id="globe_slot_30d" style="display: flex; flex-direction: column;"></div>
             </div>
         </div>
 
         <div id="tab_g_1y" class="geo-tab-content">
-            <div style="display: grid; grid-template-columns: 1fr 2fr; gap: 24px; align-items: stretch;">
+            <div class="geo-layout">
                 <div style="display: flex; flex-direction: column;">
                     <div class="sub-header">GeoIP Subnets</div>
-                    <div class="table-container" style="flex: 1;"><table><thead><tr><th style="width:60px">Cnt</th><th>Subnet</th><th>Info</th></tr></thead><tbody id="tb_geo_1y"></tbody></table></div>
+                    <div class="table-container" style="flex: 1;"><table class="kt-count-first"><thead><tr><th>Cnt</th><th>Subnet</th><th>Info</th></tr></thead><tbody id="tb_geo_1y"></tbody></table></div>
                 </div>
                 <div id="globe_slot_1y" style="display: flex; flex-direction: column;"></div>
             </div>
         </div>
 
         <div id="tab_g_all" class="geo-tab-content">
-            <div style="display: grid; grid-template-columns: 1fr 2fr; gap: 24px; align-items: stretch;">
+            <div class="geo-layout">
                 <div style="display: flex; flex-direction: column;">
                     <div class="sub-header">GeoIP Subnets</div>
-                    <div class="table-container" style="flex: 1;"><table><thead><tr><th style="width:60px">Cnt</th><th>Subnet</th><th>Info</th></tr></thead><tbody id="tb_geo_all"></tbody></table></div>
+                    <div class="table-container" style="flex: 1;"><table class="kt-count-first"><thead><tr><th>Cnt</th><th>Subnet</th><th>Info</th></tr></thead><tbody id="tb_geo_all"></tbody></table></div>
                 </div>
                 <div id="globe_slot_all" style="display: flex; flex-direction: column;"></div>
             </div>
@@ -531,13 +619,19 @@
         </div>
     </div>
 
-	<div id="map_master" style="display: none; height: 100%; flex-direction: column;">
-        <div class="sub-header" style="display: flex; justify-content: space-between; align-items: center;">
-            <span>GLOBAL THREAT MAP</span>
-            <span id="map_stats" style="text-transform: none; color: var(--text-gray); font-weight: 400; font-size: 11px;"></span>
+    <div id="map_master" style="display:none;flex-direction:column;">
+        <div class="sub-header map-toolbar">
+            <span>Source IP countries</span><div class="map-actions"><button type="button" onclick="mapReset()">Reset view</button><button type="button" onclick="mapFullscreen()">Fullscreen</button></div>
         </div>
-        <div class="table-container" style="flex: 1; padding: 16px; min-height: 450px; box-sizing: border-box;">
-            <div id="map_canvas" style="width: 100%; height: 100%;"></div>
+        <div class="map-panel">
+            <div class="map-caption" id="map_stats" aria-live="polite"></div>
+            <div class="map-content"><div>
+                <div id="map_canvas" aria-label="Recorded hits by source IP country"></div>
+                <div class="map-legend" id="map_legend"><span id="map_min"></span><span class="map-gradient"></span><span id="map_max"></span><span>Hits · logarithmic scale</span><span><i class="map-no-data"></i>No recorded hits</span></div>
+            </div><aside aria-label="Top source IP countries"><div class="sub-header">Top 10 countries</div><div class="map-ranking-heading"><span>Country</span><span>Hits · share</span></div><ol class="map-ranking" id="map_ranking"></ol><p class="map-caption">Share of all recorded IP hits, including unknown locations.</p><button type="button" id="map_unknown" hidden></button></aside></div>
+            <p class="map-caption" id="map_coverage"></p>
+            <p class="map-caption">Geolocation describes the source IP, not the attacker’s physical location. Counts cover recorded IP counters, including IPv4 and IPv6; they may differ from lifetime firewall packet totals.</p>
+            <section id="map_details" hidden><div id="map_details_title"></div><p class="map-caption" id="map_details_note"></p><div class="table-container"><table><thead><tr><th>Source IP / subnet</th><th>Hits in period</th><th>Observed ports · historical preview</th></tr></thead><tbody id="map_details_rows"></tbody></table></div></section>
         </div>
     </div>
 
@@ -555,7 +649,7 @@
         </div>
     </div>
 
-    <div class="footer">&copy; <span id="year"></span> mattheweli &nbsp;&bull;&nbsp; Uptime: <span id="uptime">-</span></div>
+    <footer class="kt-page-footer">&copy; <span id="year" data-kt-year>2026</span> mattheweli <span class="kt-footer-meta">Uptime: <span id="uptime">-</span></span><span class="kt-footer-meta">Firewall Dashboard 2.0.0</span></footer>
     
     <script>
 	
@@ -591,6 +685,7 @@
         }
 		
         function showMainTab(id) {
+            if(id==='security'){location.replace('/security/index.html');return;}
             document.querySelectorAll('.view-section').forEach(e => e.classList.remove('active'));
             document.querySelectorAll('.main-tab-btn').forEach(e => e.classList.remove('active'));
             document.getElementById('view_'+id).classList.add('active'); event.target.classList.add('active');
@@ -615,131 +710,171 @@
 
         /* MODAL LOGIC */
         let currentModalPort = "";
+        let currentModalDownloadName = "list.txt";
+        let modalRequest = 0;
         
-        // --- 2D THREAT MAP LOGIC ---
+        // Geography uses complete period aggregates, never formatted table text.
         let currentMapData = {};
-
-        function updateMap(period) {
-            const master = document.getElementById('map_master');
-            const slot = document.getElementById('globe_slot_' + period); 
-            if(slot) {
-                master.style.display = 'flex';
-                slot.appendChild(master);
-            }
-
-            const tablesToScan = ['tb_trap_', 'tb_other_', 'tb_nets_', 'tb_geo_'];
-            let countryCounts = {};
-            
-            tablesToScan.forEach(prefix => {
-                const tbody = document.getElementById(prefix + period);
-                if(!tbody) return;
-                
-                const rows = tbody.querySelectorAll('tr');
-                rows.forEach(row => {
-                    const hitsMatch = row.innerText.match(/^([0-9,]+)/);
-                    const hits = hitsMatch ? parseInt(hitsMatch[1].replace(/,/g, '')) : 0;
-                    
-                    const meta = row.querySelector('.meta');
-                    if(meta) {
-                        const ccMatch = meta.innerText.match(/- ([A-Z]{2})/);
-                        if(ccMatch && ccMatch[1]) {
-                            const cc = ccMatch[1];
-                            countryCounts[cc] = (countryCounts[cc] || 0) + hits;
-                        }
-                    }
-                });
-            });
-
-            currentMapData = countryCounts; 
-
-            // 3. Theme-Aware Gradient via CSS color-mix()
-            const hitValues = Object.values(countryCounts).filter(v => v > 0);
-            let maxHits = 1, minHits = 1;
-            if (hitValues.length > 0) {
-                maxHits = Math.max(...hitValues);
-                minHits = Math.min(...hitValues);
-            }
-
-            let cssRules = '';
-            for (let cc in countryCounts) {
-                let hits = countryCounts[cc];
-                if (hits > 0) {
-                    let intensity = 1;
-                    if (maxHits > minHits) {
-                        const logHits = Math.log(hits);
-                        const logMin = Math.log(minHits);
-                        const logMax = Math.log(maxHits);
-                        intensity = (logHits - logMin) / (logMax - logMin);
-                    }
-                    
-                    // We generate a percentage and let CSS variables handle the actual colors!
-                    const percentage = (intensity * 100).toFixed(2);
-                    
-                    cssRules += `#map_canvas path[data-code="${cc}"] { fill: color-mix(in srgb, var(--map-max) ${percentage}%, var(--map-min)) !important; }\n`;
-                    cssRules += `#map_canvas path[data-code="${cc}"]:hover { fill: var(--map-hover) !important; }\n`;
-                }
-            }
-
-            let styleTag = document.getElementById('dynamic_map_styles');
-            if (!styleTag) {
-                styleTag = document.createElement('style');
-                styleTag.id = 'dynamic_map_styles';
-                document.head.appendChild(styleTag);
-            }
-            styleTag.innerHTML = cssRules;
-
-            // 4. Recreate the SVG map using generic CSS Variables
-            const canvas = document.getElementById('map_canvas');
-            canvas.innerHTML = ''; 
-            
-            new jsVectorMap({
-                selector: '#map_canvas',
-                map: 'world',
-                zoomButtons: false, 
-                zoomOnScroll: false, 
-                backgroundColor: 'transparent',
-                regionStyle: {
-                    initial: { 
-                        fill: 'var(--map-base)', 
-                        stroke: 'var(--map-stroke)', 
-                        strokeWidth: 0.5 
-                    },
-                    hover: { 
-                        fill: 'var(--map-hover)', 
-                        fillOpacity: 1
-                    }
-                },
-                onRegionTooltipShow(event, tooltip, code) {
-                    if (currentMapData[code] && currentMapData[code] > 0) {
-                        tooltip.text(tooltip.text() + ': ' + currentMapData[code].toLocaleString() + ' hits');
-                    } else {
-                        tooltip.text(tooltip.text() + ': 0 hits');
-                    }
-                }
-            });
-            
-            document.getElementById('map_stats').innerText = `${Object.keys(currentMapData).length} Nations Mapped`;
+        let mapInstance = null;
+        let mapPeriod = '24h';
+        let mapRequest = 0;
+        let mapSelection = '';
+        const mapNumber = value => Number(value || 0).toLocaleString('de-DE');
+        const countryNames = typeof Intl.DisplayNames === 'function' ? new Intl.DisplayNames(['en'], {type:'region'}) : null;
+        function mapCountryName(code) {
+            if (code === 'unknown') return 'Unknown location';
+            try { return countryNames ? countryNames.of(code) : code; } catch (_) { return code; }
         }
+        function mapCountryValid(code) {
+            return /^[A-Z]{2}$/.test(code) && !['XX','ZZ','EU','UN'].includes(code) && (!countryNames || mapCountryName(code) !== code);
+        }
+        function mapPeriodData() {
+            return window.FW_DATA && window.FW_DATA.geography && window.FW_DATA.geography[mapPeriod];
+        }
+        function mapShowCountry(code) {
+            const data = mapPeriodData();
+            if (!data) return;
+            mapSelection = code;
+            const country = currentMapData[code];
+            const panel = document.getElementById('map_details');
+            panel.hidden = false;
+            document.getElementById('map_details_title').textContent = mapCountryName(code) + ' · ' + mapNumber(country && country.hits) + ' recorded hits';
+            const body = document.getElementById('map_details_rows');
+            body.replaceChildren();
+            const rows = country && country.rows || [];
+            for (const row of rows) {
+                const tr = document.createElement('tr');
+                for (const text of [row.ip, mapNumber(row.hits), row.ports || 'Not observed']) {
+                    const td = document.createElement('td'); td.textContent = text; tr.appendChild(td);
+                }
+                body.appendChild(tr);
+            }
+            document.getElementById('map_details_note').textContent = rows.length ?
+                'Showing ' + window.KTFormat.integer(rows.length) + ' of ' + mapNumber(country.sources) + ' IP/subnet records, ranked by hits. Ports are a historical preview (up to 12), not limited to this period.' : 'No recorded IP counters for this country in the selected period.';
+            document.querySelectorAll('#map_canvas path[data-code]').forEach(path => path.classList.toggle('map-selected', path.getAttribute('data-code') === code));
+        }
+        function mapBuildSummary(data) {
+            currentMapData = {};
+            let unknown = 0;
+            for (const [code, value] of Object.entries(data.countries || {})) {
+                if (mapCountryValid(code)) currentMapData[code] = value;
+                else unknown += Number(value.hits || 0);
+            }
+            if (unknown) currentMapData.unknown = {hits:unknown,sources:0,rows:[]};
+            // Merge unknown metadata without assigning it to a geographic region.
+            for (const [code,value] of Object.entries(data.countries || {})) if (!mapCountryValid(code)) {
+                currentMapData.unknown.sources += Number(value.sources || 0);
+                currentMapData.unknown.rows.push(...(value.rows || []));
+            }
+            if (currentMapData.unknown) currentMapData.unknown.rows.sort((a,b)=>b.hits-a.hits).splice(100);
+            const ranked = Object.entries(currentMapData).filter(([code,value]) => code !== 'unknown' && value.hits > 0).sort((a,b)=>b[1].hits-a[1].hits || a[0].localeCompare(b[0]));
+            document.getElementById('map_stats').textContent = ranked.length + (ranked.length === 1 ? ' country · ' : ' countries · ') + mapNumber(data.total) + ' recorded hits';
+            document.getElementById('map_coverage').textContent = mapNumber(data.total - unknown) + ' located · ' + mapNumber(unknown) + ' unknown';
+            const ranking = document.getElementById('map_ranking'); ranking.replaceChildren();
+            for (const [code,value] of ranked.slice(0,10)) {
+                const li=document.createElement('li'); const button=document.createElement('button'); button.type='button';
+                button.className='map-country'; button.addEventListener('click',()=>mapShowCountry(code));
+                const name=document.createElement('span'); name.textContent=mapCountryName(code);
+                const hits=document.createElement('span'); hits.textContent=mapNumber(value.hits)+' · '+window.KTFormat.number(data.total ? value.hits/data.total*100 : 0,1,1)+'%';
+                button.append(name,hits);
+                button.style.setProperty('--country-share',(value.hits/ranked[0][1].hits*100).toFixed(2)+'%');
+                li.appendChild(button);ranking.appendChild(li);
+            }
+            if (!ranked.length) { const li=document.createElement('li');li.textContent='No located events in this period';ranking.appendChild(li); }
+            const unknownButton=document.getElementById('map_unknown');unknownButton.hidden=!unknown;
+            unknownButton.textContent='Unknown location · '+mapNumber(unknown);unknownButton.onclick=()=>mapShowCountry('unknown');
+            const values=ranked.map(([,v])=>v.hits);
+            return {min:values.length ? Math.min(...values) : 0,max:values.length ? Math.max(...values) : 0};
+        }
+        function mapDraw() {
+            const data=mapPeriodData();
+            const canvas=document.getElementById('map_canvas');
+            if (mapInstance && typeof mapInstance.destroy==='function') mapInstance.destroy();
+            mapInstance=null; canvas.replaceChildren();
+            if (!data) {
+                document.getElementById('map_stats').textContent='Geographic export pending';
+                document.getElementById('map_coverage').textContent='Run firewall_stats.sh force to generate complete geographic statistics.';
+                document.getElementById('map_ranking').replaceChildren();
+                document.getElementById('map_details').hidden=true;
+                document.getElementById('map_legend').hidden=true;
+                document.getElementById('map_unknown').hidden=true;
+                return;
+            }
+            const scale=mapBuildSummary(data);
+            document.getElementById('map_legend').hidden=false;
+            document.getElementById('map_min').textContent=mapNumber(scale.min);
+            document.getElementById('map_max').textContent=mapNumber(scale.max);
+            let styleTag=document.getElementById('dynamic_map_styles');
+            if(!styleTag){styleTag=document.createElement('style');styleTag.id='dynamic_map_styles';document.head.appendChild(styleTag);}
+            styleTag.textContent=Object.entries(currentMapData).filter(([cc])=>cc!=='unknown').map(([cc,value])=>{
+                const intensity=scale.max>scale.min ? (Math.log(value.hits)-Math.log(scale.min))/(Math.log(scale.max)-Math.log(scale.min)) : .65;
+                return '#map_canvas path[data-code="'+cc+'"]{fill:color-mix(in srgb,var(--map-max) '+(20+80*intensity).toFixed(2)+'%,var(--map-min))!important}';
+            }).join('\n');
+            if (typeof jsVectorMap!=='function') {canvas.textContent='Map unavailable. Country rankings and details remain available.';return;}
+            mapInstance=new jsVectorMap({selector:'#map_canvas',map:'world',zoomButtons:true,zoomOnScroll:false,backgroundColor:'transparent',
+                regionStyle:{initial:{fill:'var(--map-base)',stroke:'var(--map-stroke)',strokeWidth:.6},hover:{fill:'var(--map-hover)',fillOpacity:1}},
+                onRegionTooltipShow(event,tooltip,code){
+                    const value=currentMapData[code];const hits=value ? value.hits : 0;
+                    tooltip.text(mapCountryName(code)+': '+mapNumber(hits)+' hits · '+window.KTFormat.number(data.total ? hits/data.total*100 : 0,1,1)+'%');
+                }});
+            canvas.querySelectorAll('path[data-code]').forEach(path=>{
+                const cc=path.getAttribute('data-code');path.addEventListener('click',()=>mapShowCountry(cc));
+                if(currentMapData[cc]) {
+                    path.setAttribute('tabindex','0');path.setAttribute('role','button');
+                    path.setAttribute('aria-label',mapCountryName(cc)+': '+mapNumber(currentMapData[cc].hits)+' hits. Show details');
+                    path.addEventListener('keydown',event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();mapShowCountry(cc);}});
+                }
+            });
+            if(mapSelection) mapShowCountry(mapSelection);
+        }
+        function updateMap(period) {
+            if(!['24h','30d','1y','all'].includes(period))return;
+            if(period!==mapPeriod){mapSelection='';document.getElementById('map_details').hidden=true;}
+            mapPeriod=period;
+            const master=document.getElementById('map_master'),slot=document.getElementById('globe_slot_'+period);
+            if(slot){master.style.display='flex';if(master.parentElement!==slot)slot.appendChild(master);}
+            const request=++mapRequest;
+            requestAnimationFrame(()=>{if(request===mapRequest && master.getBoundingClientRect().width>0)mapDraw();});
+        }
+        function mapReset() { updateMap(mapPeriod); }
+        function mapFullscreen() {
+            const master=document.getElementById('map_master');
+            const action=document.fullscreenElement ? document.exitFullscreen() : master.requestFullscreen && master.requestFullscreen();
+            if(action && action.catch)action.catch(()=>{document.getElementById('map_coverage').textContent='Fullscreen unavailable in this browser.';});
+        }
+        document.addEventListener('fullscreenchange',()=>updateMap(mapPeriod));
+        let mapResizeTimer;
+        window.addEventListener('resize',()=>{clearTimeout(mapResizeTimer);mapResizeTimer=setTimeout(()=>updateMap(mapPeriod),150);});
 
-        window.loadList = function(filename, port) {
-            currentModalPort = port;
-            document.getElementById("modalTitle").innerText = "Loading...";
+        function showReadOnlyList(filename, title, downloadName) {
+            const request = ++modalRequest;
+            currentModalDownloadName = downloadName;
+            document.getElementById("modalTitle").innerText = title;
+            document.getElementById("modalBody").innerText = "Loading...";
             document.getElementById("ipModal").style.display = "block";
-            
-            fetch('lists/' + filename)
+            return fetch('lists/' + filename + '?t=' + Date.now())
                 .then(response => {
                     if (!response.ok) throw new Error("List not found");
                     return response.text();
                 })
                 .then(text => {
-                    document.getElementById("modalTitle").innerText = "Attackers on Port " + port;
-                    document.getElementById("modalBody").innerText = text;
+                    if (request === modalRequest) document.getElementById("modalBody").innerText = text;
                 })
                 .catch(err => {
-                    document.getElementById("modalBody").innerText = "Error loading list: " + err.message;
+                    if (request === modalRequest) document.getElementById("modalBody").innerText = "Error loading list: " + err.message;
                 });
+        }
+        window.loadList = function(filename, port) {
+            currentModalPort = port;
+            return showReadOnlyList(filename, "Attackers on Port " + port, "attackers_port_" + port + ".txt");
         };
-        
+        window.showPorts = function(button) {
+            const filename = button.dataset.portList || '';
+            if (!/^ipports_[a-f0-9]{64}\.txt$/.test(filename)) return;
+            const ip = button.dataset.ip || '';
+            return showReadOnlyList(filename, "Ports targeted on " + ip, "targeted_ports_" + ip.replace(/[^a-zA-Z0-9_.-]/g, '_') + ".txt");
+        };
+
         function closeModal() {
             document.getElementById("ipModal").style.display = "none";
         }
@@ -747,7 +882,7 @@
         function copyIPList() {
             const text = document.getElementById("modalBody").innerText;
             navigator.clipboard.writeText(text).then(() => {
-                alert("IPs copied to clipboard!");
+                alert("List copied to clipboard!");
             }).catch(err => {
                 console.error('Failed to copy: ', err);
             });
@@ -759,7 +894,7 @@
             const url = window.URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
-            a.download = "attackers_port_" + currentModalPort + ".txt";
+            a.download = currentModalDownloadName;
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
@@ -773,15 +908,18 @@
         
         window.loadList = loadList;
 
-        let refreshIntervalId = null;
+
+        let statsLoading=false;
         async function fetchStats() {
+            if(statsLoading)return;statsLoading=true;
             const dot = document.getElementById('loading_dot'); dot.classList.add('active');
             try {
                 const response = await fetch('firewall_data.js?t=' + Date.now());
                 if (!response.ok) throw new Error("Net Error");
                 const text = await response.text();
-                window.eval(text); renderDashboard();
+                window.eval(text); renderDashboard(); await checkFirewallStatus();
             } catch (error) { console.error("Fetch error:", error); }
+            statsLoading=false;
             setTimeout(() => dot.classList.remove('active'), 500);
         }
 
@@ -793,9 +931,9 @@
                     if(!val || val==='0' || val==='=0' || val==='+0' || val==='-0'){ 
                         el.innerHTML=`<span class="diff eq">-</span>`; 
                     } else if(val.includes('+')){ 
-                        el.innerHTML=`<span class="diff pos">${val}</span>`; 
+                        el.innerHTML=`<span class="diff pos">${window.KTFormat.signedInteger(val)}</span>`; 
                     } else if(val.includes('-')){ 
-                        el.innerHTML=`<span class="diff neg">${val}</span>`; 
+                        el.innerHTML=`<span class="diff neg">${window.KTFormat.signedInteger(val)}</span>`; 
                     } else { 
                         el.innerHTML=`<span class="diff eq">-</span>`; 
                     } 
@@ -858,8 +996,8 @@
                 document.getElementById('tb_monthly').innerHTML = d.tables.monthly; document.getElementById('tb_yearly').innerHTML = d.tables.yearly;
                 
                 if(d.averages) {
-                    document.getElementById('avg_hourly').innerText = "Avg: " + d.averages.hourly; document.getElementById('avg_daily').innerText = "Avg: " + d.averages.daily;
-                    document.getElementById('avg_monthly').innerText = "Avg: " + d.averages.monthly; document.getElementById('avg_yearly').innerText = "Avg: " + d.averages.yearly;
+                    document.getElementById('avg_hourly').innerText = "Avg: " + window.KTFormat.integer(d.averages.hourly); document.getElementById('avg_daily').innerText = "Avg: " + window.KTFormat.integer(d.averages.daily);
+                    document.getElementById('avg_monthly').innerText = "Avg: " + window.KTFormat.integer(d.averages.monthly); document.getElementById('avg_yearly').innerText = "Avg: " + window.KTFormat.integer(d.averages.yearly);
                 }
                 
                 ['24h','30d','1y','all'].forEach(p => {
@@ -871,70 +1009,136 @@
                     if(d.tables['ports_'+p]) document.getElementById('tb_ports_'+p).innerHTML = d.tables['ports_'+p];
                     if(d.tables['brute_'+p]) document.getElementById('tb_brute_'+p).innerHTML = d.tables['brute_'+p];
                 });
-                updateMap('24h');
+                updateMap(mapPeriod);
+                syncQuickUnban();
+                if(window.attachIPDiagnostics)window.attachIPDiagnostics();
+                formatFirewallCounts();
                 
-                // HIDE IPV6 GLOBALLY se disabilitato
+                // Hide IPv6 elements when disabled
                 if (d.ipv6_status === "false") {
                     document.querySelectorAll('.col-v6, .v6-element').forEach(el => el.style.display = 'none');
                 }
             }
         }
 
-        function changeRefreshRate(val) {
-            localStorage.setItem('fw_stats_refresh_rate', val);
-            if (refreshIntervalId) clearInterval(refreshIntervalId);
-            if (val > 0) { refreshIntervalId = setInterval(fetchStats, parseInt(val)); }
-        }
 
         window.onload = function() {
             document.getElementById('year').textContent = new Date().getFullYear();
             checkFirewallStatus();
             fetchStats();
-            const savedRate = localStorage.getItem('fw_stats_refresh_rate') || "0";
-            document.getElementById('refresh_timer').value = savedRate;
-            changeRefreshRate(savedRate);
         };
 		
 		// --- FIREWALL API FUNCTIONS ---
         async function lookupIP() {
-            const ip = document.getElementById('ip_input').value.trim();
-            if (!ip) return;
-            
-            const resDiv = document.getElementById('ip_status_result');
-            resDiv.innerHTML = "Searching...";
-            
-            try {
-                const res = await fetch(`firewall_api.php?action=lookup&ip=${ip}`);
-                const data = await res.json();
-                
-                if (data.status === "error") {
-                    resDiv.innerHTML = `<span style="color:var(--red)">Error: ${data.message}</span>`;
-                } else if (data.blocked) {
-                    resDiv.innerHTML = `<span style="color:var(--red)">IP ${ip} is currently BLOCKED in: ${data.lists.join(', ')}</span>`;
-                } else {
-                    resDiv.innerHTML = `<span style="color:var(--green)">IP ${ip} is NOT blocked.</span>`;
-                }
-            } catch (e) {
-                resDiv.innerHTML = `<span style="color:var(--red)">API communication error. Check PHP backend.</span>`;
-            }
+            const ip=document.getElementById('ip_input').value.trim();
+            if(ip && window.explainIP) return window.explainIP(ip);
         }
 
+        let adminCsrf = '', adminAuthenticated = false;
+        function syncQuickUnban() {
+            document.querySelectorAll('a[onclick^="unbanIP("]').forEach(link => {
+                link.dataset.adminOnly = '';
+                link.hidden = !adminAuthenticated;
+            });
+        }
+        function formatFirewallCounts() {
+            const format = el => {
+                const raw = el.textContent.replace(/[.,]/g, '').trim();
+                if (/^\d+$/.test(raw)) el.textContent = BigInt(raw).toLocaleString('de-DE');
+            };
+            document.querySelectorAll('.grid-cards .val, .kt-hits-last tbody td:last-child').forEach(format);
+            document.querySelectorAll('.port-more').forEach(button=>{const match=button.textContent.match(/^\(\+(\d+)\)$/);if(match)button.textContent='(+'+window.KTFormat.integer(match[1])+')';});
+            document.querySelectorAll('td.num').forEach(cell=>{const raw=cell.textContent.trim();if(/^[+-]?\d+$/.test(raw))cell.textContent=window.KTFormat.signedInteger(raw);});
+            document.querySelectorAll('.kt-count-first tbody td:first-child').forEach(cell => format(cell.querySelector('.badge') || cell));
+        }
+        function showAdminState(active) {
+            adminAuthenticated = !!active;
+            document.body.classList.toggle('kt-admin-authenticated', adminAuthenticated);
+            syncQuickUnban();
+            document.getElementById('admin_state').textContent = active ? 'Administrator' : 'Read-only';
+            document.getElementById('admin_login_button').hidden = !!active;
+            document.getElementById('admin_logout_button').hidden = !active;
+            document.querySelectorAll('[data-admin-write]').forEach(el => el.disabled = !active);
+            document.querySelectorAll('[data-admin-only]').forEach(el => el.hidden = !active);
+            if(!active && document.getElementById('security_audit'))document.getElementById('security_audit').textContent='';
+            if(!active) { document.getElementById('ip_input').value=''; document.getElementById('ip_status_result').textContent=''; }
+        }
+        async function authRequest(action, payload) {
+            const options = {credentials:'same-origin',cache:'no-store',headers:{}};
+            if (payload) {
+                options.method='POST'; options.headers={'Content-Type':'application/json','X-KT-CSRF':adminCsrf};
+                options.body=JSON.stringify({action,...payload});
+            }
+            const res=await fetch('firewall_api.php'+(payload?'':'?action='+action),options);
+            const data=await res.json();
+            if(!res.ok || data.status!=='success') throw new Error(data.message||'Admin login failed');
+            return data;
+        }
+        async function refreshAdminAuth() {
+            if(window.KT_PREVIEW) return;
+            const data=await authRequest('auth_status'); adminCsrf=data.csrf; showAdminState(data.authenticated);
+        }
+        async function openAdminLogin() {
+            try {
+                if(location.protocol!=='https:') throw new Error('Open the dashboard over HTTPS');
+                await refreshAdminAuth();
+                if(adminAuthenticated) return;
+                document.getElementById('admin_login_error').textContent='';
+                document.getElementById('admin_password').value='';
+                document.getElementById('admin_dialog').showModal();
+                document.getElementById('admin_password').focus();
+            } catch(e) { alert(e.message); }
+        }
+        async function adminLogout() {
+            try { await refreshAdminAuth(); await authRequest('logout',{}); showAdminState(false); adminCsrf=''; }
+            catch(e) { alert(e.message); }
+        }
+        document.getElementById('admin_login_form').addEventListener('submit',async event=>{
+            event.preventDefault();
+            const button=event.submitter; if(button) button.disabled=true;
+            try {
+                const data=await authRequest('login',{password:document.getElementById('admin_password').value});
+                adminCsrf=data.csrf; showAdminState(true); document.getElementById('admin_password').value='';
+                document.getElementById('admin_dialog').close();
+            } catch(e) { document.getElementById('admin_login_error').textContent=e.message; }
+            finally { if(button) button.disabled=false; }
+        });
+        refreshAdminAuth().catch(e=>console.warn('Admin access:',e.message));
+        async function fwFetch(url) {
+            if(window.KT_PREVIEW) throw new Error('Read-only preview: API disabled');
+            const parsed=new URL(url,location.href),action=parsed.searchParams.get('action');
+            const write=['ban','unban','enable','disable','confirm_policy','rollback_policy'].includes(action);
+            const options={credentials:'same-origin',cache:'no-store',headers:{}};
+            if(write) {
+                await refreshAdminAuth();
+                if(!adminAuthenticated) { await openAdminLogin(); throw new Error('Admin login and repeat the action'); }
+            }
+            if(write){options.method='POST';options.headers={'Content-Type':'application/json','X-KT-CSRF':adminCsrf};const payload=Object.fromEntries(parsed.searchParams);if(payload.duration!==undefined)payload.duration=Number(payload.duration);options.body=JSON.stringify(payload);parsed.search='';}
+            const response=await fetch(parsed,options);
+            if(response.status===401) showAdminState(false);
+            if(!response.ok) {const data=await response.json(); throw new Error(data.message||'API HTTP '+response.status);}
+            return response;
+        }
+        async function checkedAction(url) {const res=await fwFetch(url);const data=await res.json();if(data.status!=='success')throw new Error(data.message||'Action failed');return data;}
         async function banIP() {
+            try {
             const ip = document.getElementById('ip_input').value.trim();
             if (!ip) return;
             if(confirm(`Are you sure you want to manually BLOCK ${ip}?`)) {
-                await fetch(`firewall_api.php?action=ban&ip=${ip}`);
-                alert(`IP ${ip} successfully blocked.`);
+                await checkedAction(`firewall_api.php?action=ban&ip=${encodeURIComponent(ip)}&duration=${encodeURIComponent(document.getElementById('manual_duration').value)}&note=${encodeURIComponent(document.getElementById('manual_note').value)}`);
+                alert(`Ban entry added for ${ip}. Use Details to check other lists and effective policy.`);
                 lookupIP();
                 fetchStats(); // Auto-refresh dashboard
             }
+            } catch(e) { alert(e.message); }
         }
 
         async function unbanIP(ip) {
+            try {
             if (!ip) return;
             if(confirm(`Are you sure you want to UNBLOCK and remove ${ip}?`)) {
-                await fetch(`firewall_api.php?action=unban&ip=${ip}`);
-                alert(`IP ${ip} successfully unblocked.`);
+                const result=await checkedAction(`firewall_api.php?action=unban&ip=${encodeURIComponent(ip)}`);
+                alert(result.remaining && result.remaining.length ? `Removed manual/dynamic ban; still listed in: ${result.remaining.join(', ')}` : `IP ${ip} successfully unblocked.`);
                 // If it was called from the quick search, clear it
                 if(document.getElementById('ip_input').value === ip) {
                     document.getElementById('ip_status_result').innerHTML = "";
@@ -942,17 +1146,26 @@
                 }
                 fetchStats(); // Auto-refresh dashboard
             }
+            } catch(e) { alert(e.message); }
         }
-		
+
 		// Check the current firewall status on startup
+        function setFirewallIndicator(enabled, applied, available = true) {
+            const ok = available && enabled === true && applied === true;
+            document.getElementById('fw_rules_led').classList.toggle('is-on', ok);
+            document.getElementById('fw_protection_state').textContent = !available ? 'Firewall status unavailable' : enabled ? (applied ? 'Enabled · rules verified' : 'Enabled · rules incomplete') : 'Disabled';
+        }
         async function checkFirewallStatus() {
             try {
-                const res = await fetch('firewall_api.php?action=status');
+                const res = await fwFetch('firewall_api.php?action=status');
                 const data = await res.json();
                 if (data.status === "success") {
                     document.getElementById('fw_toggle').checked = data.enabled;
-                }
+                    setFirewallIndicator(data.enabled, data.applied);
+                    if(window.policyGuardUpdate)window.policyGuardUpdate(data);
+                } else { setFirewallIndicator(false, false, false); }
             } catch (e) {
+                setFirewallIndicator(false, false, false);
                 console.error("Error reading firewall status:", e);
             }
         }
@@ -960,15 +1173,17 @@
         // Handle the On/Off button click
         async function toggleFirewall(cb) {
             const action = cb.checked ? 'enable' : 'disable';
-            if(!confirm(`Are you sure you want to ${action.toUpperCase()} the firewall tracking?`)) {
+            if(!confirm(`Are you sure you want to ${action.toUpperCase()} the custom firewall rules?`)) {
                 cb.checked = !cb.checked; // Cancel the animation if the user declines
                 return;
             }
             
             try {
-                const res = await fetch(`firewall_api.php?action=${action}`);
+                const res = await fwFetch(`firewall_api.php?action=${action}`);
                 const data = await res.json();
                 if (data.status === "success") {
+                    if(window.policyGuardUpdate)window.policyGuardUpdate(data);
+                    checkFirewallStatus();
                     fetchStats(); // Update dashboard data
                 } else {
                     alert("Error: " + data.message);
@@ -981,34 +1196,45 @@
         }
 		
 		// === LIVE ULOGD LOGIC ===
-        const fmtBytes = (b) => { if (!b) return "0 B"; const u = ['B','KB','MB','GB','TB']; let i = 0; while(b >= 1024 && i < u.length-1){ b/=1024; i++; } return b.toFixed(2) + ' ' + u[i]; };
-        let ulogdInterval = null;
+        const fmtBytes = b => window.KTFormat.bytes(b,1024,2);
+        let ulogdBusy = false;
         let ulogdLoaded = false;
-
-        // Triggers only when the dropdown is opened
-        function toggleUlogd(detailsEl) {
-            if (detailsEl.open) {
-                fetchUlogd(); // Fetch immediately
-                ulogdInterval = setInterval(() => fetchUlogd(), 10000); // Then update every 10 seconds
-            } else {
-                clearInterval(ulogdInterval); // Stop updating if closed (saves CPU)
-            }
+        let ulogdRaw = '';
+        function filterUlogd() {
+            const search = document.getElementById('ulogd_search').value.toLowerCase();
+            const protocol = document.getElementById('ulogd_protocol').value;
+            const rows = ulogdRaw.split('\n').filter(Boolean);
+            const shown = rows.filter(line => line.toLowerCase().includes(search) && (protocol === 'all' || (protocol === 'tcp' && /\bTCP\b|Flags \[/.test(line)) || (protocol === 'udp' && /\bUDP\b/.test(line)) || (protocol === 'icmp' && /\bICMP6?\b|\bICMPv6\b/.test(line))));
+            document.getElementById('content_ulogd').textContent = shown.join('\n') || 'No matching log entries';
+            document.getElementById('ulogd_filter_count').textContent = window.KTFormat.integer(shown.length) + ' / ' + window.KTFormat.integer(rows.length) + ' lines';
         }
+
+        // Fetch the live log only while its panel is open.
+        function toggleUlogd(detailsEl) {
+            if(detailsEl.open)fetchUlogd();
+        }
+        window.ktRefreshPage=async({manual=false}={})=>{
+            await Promise.all([fetchStats(),document.getElementById('details_ulogd').open?fetchUlogd(manual):Promise.resolve()]);
+        };
 
         // Configure how many lines to fetch from the log
         const LOG_LINES = 1000;
 
         async function fetchUlogd(force = false, event = null) {
             if (event) event.stopPropagation();
+            if (!document.getElementById('details_ulogd').open || ulogdBusy) return;
+            if (!force && document.getElementById('ulogd_pause').checked) return;
+            ulogdBusy=true;
             const viewer = document.getElementById('content_ulogd');
             const sizeLabel = document.getElementById('size_ulogd');
             
             try {
                 // Request log data from the PHP API with the specified line limit
-                const response = await fetch(`firewall_api.php?action=livelog&lines=${LOG_LINES}&t=${Date.now()}`);
+                const response = await fwFetch(`firewall_api.php?action=livelog&lines=${LOG_LINES}&t=${Date.now()}`);
                 if (!response.ok) throw new Error("API Error");
                 
                 const data = await response.json();
+                if(!document.getElementById('details_ulogd').open)return;
                 
                 // Check if the user has scrolled up, to avoid snapping their view
                 const wasAtBottom = (viewer.scrollHeight - viewer.scrollTop <= viewer.clientHeight + 50);
@@ -1017,19 +1243,21 @@
                     viewer.innerText = data.message;
                     sizeLabel.innerText = "";
                 } else {
-                    viewer.innerText = data.log;
-                    sizeLabel.innerText = "(Live PCAP Decode - Last " + LOG_LINES + " lines)";
+                    ulogdRaw = data.log.replace(/^(\d{4})-(\d{2})-(\d{2}) (\d{2}:\d{2}:\d{2})(?:\.(\d+))?/gm,
+                        (_,y,m,d,time,fraction)=>`${d}/${m}/${y} ${time}${fraction?'.'+fraction.slice(0,3):''}`);
+                    filterUlogd();
+                    sizeLabel.innerText = "(Router time — last " + LOG_LINES + " lines" + (data.sampled ? " · sampled capture" : "") + (data.partial_preview ? " · partial preview" : "") + ")";
                 }
                 
                 // Auto-scroll to the bottom if the user is already at the bottom
-                if (!ulogdLoaded || force || wasAtBottom) {
+                if (document.getElementById('ulogd_follow').checked && (!ulogdLoaded || force || wasAtBottom)) {
                     viewer.scrollTop = viewer.scrollHeight;
                 }
                 ulogdLoaded = true;
             } catch (err) {
-                viewer.innerText = "API connection error or PCAP unavailable.";
+                viewer.innerText = err.message || "Cannot read PCAP: check ulogd.";
                 sizeLabel.innerText = "";
-            }
+            } finally {ulogdBusy=false;}
         }
 
         function downloadUlogd(event) {
@@ -1044,3 +1272,4 @@
     </script>
 </body>
 </html>
+

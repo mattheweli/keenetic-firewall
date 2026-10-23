@@ -1,4 +1,6 @@
-#!/bin/sh
+#!/opt/bin/bash
+# ABUSEIPDB AUTO-REPORTER v3.0.0
+# Release: 2026-10-22 | Stable. See CHANGELOG.md for release details.
 
 # ==============================================================================
 # ABUSEIPDB AUTO-REPORTER v2.2.1 (GEO-IP EDITION)
@@ -16,7 +18,11 @@
 #
 # ==============================================================================
 
-export PATH=/opt/bin:/opt/sbin:/usr/bin:/usr/sbin:/bin:/sbin
+export PATH=${KT_PATH:-/opt/bin:/opt/sbin:/usr/bin:/usr/sbin:/bin:/sbin}
+# abuse_reporter 3.0.0
+. "${KT_COMMON:-/opt/lib/keentool/common.sh}" || exit 1
+kt_init abuse-reporter || exit $?
+sqlite3() { kt_sqlite "$@"; }
 
 # ==============================================================================
 # 1. CONFIGURATION & KEYS
@@ -62,7 +68,7 @@ if [ -f "$DB_FILE" ]; then
     sqlite3 "$DB_FILE" "CREATE TABLE IF NOT EXISTS abuse_reports (ip TEXT PRIMARY KEY, last_sent INTEGER);"
 fi
 
-logger -t "$LOG_TAG" "Starting Reporter v2.1.2"
+logger -t "$LOG_TAG" "Starting Reporter v3.0.0"
 
 # $1=IP, $2=Categories, $3=Comment, $4=Type
 send_report() {
@@ -83,7 +89,7 @@ send_report() {
     fi
 
     # 3. NEW ACTIVITY CHECK
-    NEW_HITS=$(sqlite3 "$DB_FILE" "SELECT SUM(count) FROM ip_drops WHERE ip LIKE '${IP}%' AND timestamp > $LAST_SENT;")
+    NEW_HITS=$(sqlite3 "$DB_FILE" "SELECT SUM(count) FROM ip_drops WHERE ip IN ('$IP','$IP/32','$IP/128') AND timestamp > $LAST_SENT;")
     NEW_HITS=${NEW_HITS:-0}
 
     if [ "$LAST_SENT" -gt 0 ] && [ "$NEW_HITS" -eq 0 ]; then
@@ -102,7 +108,7 @@ send_report() {
     echo "    -> Reporting $IP..."
 
     # 5. Send to AbuseIPDB
-    RESPONSE=$(curl -s -m 5 https://api.abuseipdb.com/api/v2/report \
+    RESPONSE=$(curl -fsS --connect-timeout 3 -m 5 https://api.abuseipdb.com/api/v2/report \
         --data-urlencode "ip=$IP" \
         --data-urlencode "categories=$CATS" \
         --data-urlencode "comment=$FINAL_COMMENT" \
@@ -375,3 +381,4 @@ echo "$LOG_MSG"
 logger -t "$LOG_TAG" "$LOG_MSG"
 
 echo "Done."
+

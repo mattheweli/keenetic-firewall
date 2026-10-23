@@ -1,4 +1,6 @@
-#!/bin/sh
+#!/opt/bin/bash
+# KEENETIC FIREWALL MANAGER v3.0.0
+# Release: 2026-10-22 | Stable. See CHANGELOG.md for release details.
 
 # ==============================================================================
 # KEENETIC FIREWALL MANAGER v2.7.0 (MASTER SWITCH)
@@ -75,7 +77,7 @@ BOLD='\033[1m'; DIM='\033[2m'
 show_header() {
     clear
     echo -e "${BLUE}=================================================${NC}"
-    echo -e "${BOLD}🛡️  KEENETIC FIREWALL MANAGER v2.7.0${NC}"
+    echo -e "${BOLD}🛡️  KEENETIC FIREWALL MANAGER v3.0.0${NC}"
     echo -e "${BLUE}=================================================${NC}"
 }
 
@@ -182,6 +184,11 @@ load_config() {
     : ${REPORT_COOLDOWN:=$DEF_REP_COOL}
     : ${UPDATE_INTERFACE:=""}
     
+    : ${BYPASS_INTERFACES="tun+"}
+    : ${TRAP_BYPASS_INTERFACES="br0 tun+"}
+    : ${BYPASS_NETWORKS_V4="10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 169.254.0.0/16"}
+    : ${BYPASS_NETWORKS_V6="::1/128 fe80::/10"}
+    : ${DNS_BYPASS_PORTS="53 853"}
     # GeoIP fallback
     : ${BANNED_COUNTRIES:=$DEF_BANNED_COUNTRIES}
     : ${SOURCES_V4:=$L4_DEFAULTS}
@@ -191,37 +198,49 @@ load_config() {
 }
 
 save_config() {
-    echo "ENABLE_FIREWALL=\"$ENABLE_FIREWALL\"" > "$CONF_FILE"
-    echo "ENABLE_IPV6=\"$ENABLE_IPV6\"" >> "$CONF_FILE"
-    echo "ENABLE_FWD_PROTECTION=\"$ENABLE_FWD_PROTECTION\"" >> "$CONF_FILE"
+    local config_tmp
+    config_tmp=$(mktemp "${CONF_FILE}.XXXXXX") || return 1
+    [ ! -f "$CONF_FILE" ] || cp -p "$CONF_FILE" "${CONF_FILE}.previous" || { rm -f "$config_tmp";return 1; }
+    echo "ENABLE_FIREWALL=\"$ENABLE_FIREWALL\"" > "$config_tmp" || { rm -f "$config_tmp";return 1; }
+    echo "ENABLE_IPV6=\"$ENABLE_IPV6\"" >> "$config_tmp" || { rm -f "$config_tmp";return 1; }
+    echo "ENABLE_FWD_PROTECTION=\"$ENABLE_FWD_PROTECTION\"" >> "$config_tmp" || { rm -f "$config_tmp";return 1; }
     
-    echo "ENABLE_AUTOBAN=\"$ENABLE_AUTOBAN\"" >> "$CONF_FILE"
-	echo "ENABLE_MANUAL=\"$ENABLE_MANUAL\"" >> "$CONF_FILE"
-    echo "ENABLE_BRUTEFORCE=\"$ENABLE_BRUTEFORCE\"" >> "$CONF_FILE"
-    echo "ENABLE_CONNLIMIT=\"$ENABLE_CONNLIMIT\"" >> "$CONF_FILE"
-    echo "CONNLIMIT_MAX=\"$CONNLIMIT_MAX\"" >> "$CONF_FILE"
-    echo "CONNLIMIT_CUSTOM=\"$CONNLIMIT_CUSTOM\"" >> "$CONF_FILE"
+    echo "ENABLE_AUTOBAN=\"$ENABLE_AUTOBAN\"" >> "$config_tmp" || { rm -f "$config_tmp";return 1; }
+	echo "ENABLE_MANUAL=\"$ENABLE_MANUAL\"" >> "$config_tmp" || { rm -f "$config_tmp";return 1; }
+    echo "ENABLE_BRUTEFORCE=\"$ENABLE_BRUTEFORCE\"" >> "$config_tmp" || { rm -f "$config_tmp";return 1; }
+    echo "ENABLE_CONNLIMIT=\"$ENABLE_CONNLIMIT\"" >> "$config_tmp" || { rm -f "$config_tmp";return 1; }
+    echo "CONNLIMIT_MAX=\"$CONNLIMIT_MAX\"" >> "$config_tmp" || { rm -f "$config_tmp";return 1; }
+    echo "CONNLIMIT_CUSTOM=\"$CONNLIMIT_CUSTOM\"" >> "$config_tmp" || { rm -f "$config_tmp";return 1; }
     
-    echo "BAN_TIMEOUT=\"$BAN_TIMEOUT\"" >> "$CONF_FILE"
-    echo "TCP_SERVICES=\"$TCP_SERVICES\"" >> "$CONF_FILE"
-    echo "UDP_SERVICES=\"$UDP_SERVICES\"" >> "$CONF_FILE"
+    echo "BAN_TIMEOUT=\"$BAN_TIMEOUT\"" >> "$config_tmp" || { rm -f "$config_tmp";return 1; }
+    echo "TCP_SERVICES=\"$TCP_SERVICES\"" >> "$config_tmp" || { rm -f "$config_tmp";return 1; }
+    echo "UDP_SERVICES=\"$UDP_SERVICES\"" >> "$config_tmp" || { rm -f "$config_tmp";return 1; }
     
-    echo "BYPASS_CONN_TCP=\"$BYPASS_CONN_TCP\"" >> "$CONF_FILE"
-    echo "BYPASS_CONN_UDP=\"$BYPASS_CONN_UDP\"" >> "$CONF_FILE"
-    echo "BYPASS_BRUTE_TCP=\"$BYPASS_BRUTE_TCP\"" >> "$CONF_FILE"
-    echo "BYPASS_BRUTE_UDP=\"$BYPASS_BRUTE_UDP\"" >> "$CONF_FILE"
+    echo "BYPASS_CONN_TCP=\"$BYPASS_CONN_TCP\"" >> "$config_tmp" || { rm -f "$config_tmp";return 1; }
+    echo "BYPASS_CONN_UDP=\"$BYPASS_CONN_UDP\"" >> "$config_tmp" || { rm -f "$config_tmp";return 1; }
+    echo "BYPASS_BRUTE_TCP=\"$BYPASS_BRUTE_TCP\"" >> "$config_tmp" || { rm -f "$config_tmp";return 1; }
+    echo "BYPASS_BRUTE_UDP=\"$BYPASS_BRUTE_UDP\"" >> "$config_tmp" || { rm -f "$config_tmp";return 1; }
     
-    echo "TCP_PASSIVE_RANGE=\"$TCP_PASSIVE_RANGE\"" >> "$CONF_FILE"
-    echo "BF_SECONDS=\"$BF_SECONDS\"" >> "$CONF_FILE"
-    echo "BF_HITCOUNT=\"$BF_HITCOUNT\"" >> "$CONF_FILE"
-    echo "REPORT_COOLDOWN=\"$REPORT_COOLDOWN\"" >> "$CONF_FILE"
-    echo "UPDATE_INTERFACE=\"$UPDATE_INTERFACE\"" >> "$CONF_FILE"
+    echo "TCP_PASSIVE_RANGE=\"$TCP_PASSIVE_RANGE\"" >> "$config_tmp" || { rm -f "$config_tmp";return 1; }
+    echo "BF_SECONDS=\"$BF_SECONDS\"" >> "$config_tmp" || { rm -f "$config_tmp";return 1; }
+    echo "BF_HITCOUNT=\"$BF_HITCOUNT\"" >> "$config_tmp" || { rm -f "$config_tmp";return 1; }
+    echo "REPORT_COOLDOWN=\"$REPORT_COOLDOWN\"" >> "$config_tmp" || { rm -f "$config_tmp";return 1; }
+    echo "UPDATE_INTERFACE=\"$UPDATE_INTERFACE\"" >> "$config_tmp" || { rm -f "$config_tmp";return 1; }
     
+    for key in BYPASS_INTERFACES TRAP_BYPASS_INTERFACES BYPASS_NETWORKS_V4 BYPASS_NETWORKS_V6 DNS_BYPASS_PORTS;do
+        printf '%s="%s"\n' "$key" "${!key}" >> "$config_tmp" || { rm -f "$config_tmp";return 1; }
+    done
     # Save GeoIP settings
-    echo "BANNED_COUNTRIES=\"$BANNED_COUNTRIES\"" >> "$CONF_FILE"
-    echo "SOURCES_V4=\"$SOURCES_V4\"" >> "$CONF_FILE"
-    echo "SOURCES_V6=\"$SOURCES_V6\"" >> "$CONF_FILE"
+    echo "BANNED_COUNTRIES=\"$BANNED_COUNTRIES\"" >> "$config_tmp" || { rm -f "$config_tmp";return 1; }
+    echo "SOURCES_V4=\"$SOURCES_V4\"" >> "$config_tmp" || { rm -f "$config_tmp";return 1; }
+    echo "SOURCES_V6=\"$SOURCES_V6\"" >> "$config_tmp" || { rm -f "$config_tmp";return 1; }
+    # Preserve supported extensions such as NFLOG rate and explicit list-shrink overrides.
+    if [ -f "$CONF_FILE" ];then
+        awk -F= 'NR==FNR{keys[$1]=1;next} /^[A-Z_][A-Z0-9_]*=/{if(!($1 in keys))print}' "$config_tmp" "$CONF_FILE" >> "$config_tmp" || { rm -f "$config_tmp";return 1; }
+    fi
+    chmod 600 "$config_tmp" && mv "$config_tmp" "$CONF_FILE"
 }
+
 
 # --- PORT EDITOR (GRANULAR BYPASS) ---
 
@@ -700,6 +719,7 @@ do_flush_menu() {
                 sleep 1 
                 ;;
             5) 
+                /opt/bin/bash /opt/bin/firewall_security clear-manual || { echo "Could not clear manual bans";continue; }
                 ipset flush Blacklist 2>/dev/null
                 ipset flush Blacklist6 2>/dev/null
                 > "$BACKUP_MANUAL_V4" 2>/dev/null
@@ -713,6 +733,7 @@ do_flush_menu() {
                 read -r confirm
                 if [ "$confirm" = "y" ]; then
                     ipset flush
+                    /opt/bin/bash /opt/bin/firewall_security clear-manual || :
                     > "$BACKUP_MANUAL_V4" 2>/dev/null
                     > "$BACKUP_MANUAL_V6" 2>/dev/null
                     echo -e "${RED}ALL IP SETS FLUSHED.${NC}"
@@ -770,6 +791,7 @@ do_settings() {
         echo -e " 12) AbuseIPDB Settings ................ [${WHITE}Key & Cooldown${NC}]"
         echo -e " 13) GeoIP Banned Countries ............ [${WHITE}${BANNED_COUNTRIES:-None}${NC}]"
         echo -e " 14) Download via Interface (VPN) ...... [$UI_UPD_IF]"
+        echo " 15) Network/interface/DNS bypasses ..... [Edit...]"
         echo ""
         echo -e " 0) ${GREEN}Apply Changes & Return${NC} (Restarts Hook)"
         echo -e " x) ${RED}Return WITHOUT applying${NC} (Keep current rules)"
@@ -827,6 +849,7 @@ do_settings() {
                     echo -e "${YELLOW}Manual Blacklists Disabled.${NC}"
                     read -p "Do you want to FLUSH existing manual bans? (y/n): " flush_confirm
                     if [ "$flush_confirm" = "y" ]; then
+                        /opt/bin/bash /opt/bin/firewall_security clear-manual || { echo "Could not clear manual bans";continue; }
                         ipset flush Blacklist 2>/dev/null
                         ipset flush Blacklist6 2>/dev/null
                         > "$BACKUP_MANUAL_V4" 2>/dev/null
@@ -915,12 +938,39 @@ do_settings() {
                 fi
                 save_config; pause
                 ;;
+            15)
+                echo 'Bypasses are trusted exceptions. Empty values remove that category.'
+                echo "1) Interfaces: $BYPASS_INTERFACES"
+                echo "2) Trap interfaces: $TRAP_BYPASS_INTERFACES"
+                echo "3) IPv4 networks: $BYPASS_NETWORKS_V4"
+                echo "4) IPv6 INPUT networks: $BYPASS_NETWORKS_V6"
+                echo "5) DNS response ports: $DNS_BYPASS_PORTS"
+                read -r -p 'Select category (1-5): ' category
+                key='';case "$category" in 1)key=BYPASS_INTERFACES;;2)key=TRAP_BYPASS_INTERFACES;;3)key=BYPASS_NETWORKS_V4;;4)key=BYPASS_NETWORKS_V6;;5)key=DNS_BYPASS_PORTS;;esac
+                if [ -n "$key" ];then
+                    read -r -p 'Enter space-separated values: ' value
+                    valid=true
+                    for token in $value;do
+                        case "$category" in
+                         1|2) [[ "$token" =~ ^[a-zA-Z0-9_.:+-]+$ ]] || valid=false;;
+                         3|4) [[ "$token" =~ ^[a-fA-F0-9.:/]+$ ]] || valid=false;;
+                         5) [[ "$token" =~ ^[0-9]+$ ]] && [ "$token" -ge 1 ] && [ "$token" -le 65535 ] || valid=false;;
+                        esac
+                    done
+                    if [ "$valid" = true ];then printf -v "$key" '%s' "$value";save_config
+                    else echo 'Invalid bypass value; configuration unchanged.';pause;fi
+                fi
+                ;;
             0)
                 # Execute hook cleanly in background logic
                 echo -e "\n${YELLOW}Applying configuration and restarting Firewall Hook...${NC}"
                 if [ -x "$SCRIPT_HOOK" ]; then 
-                    table=filter "$SCRIPT_HOOK" >/dev/null 2>&1
-                    echo -e "${GREEN}Firewall rules updated successfully.${NC}"
+                    if table=filter "$SCRIPT_HOOK";then
+                        echo -e "${GREEN}Firewall rules applied and verified.${NC}"
+                    else
+                        echo -e "${RED}Firewall apply failed; inspect diagnostics. Settings remain saved.${NC}"
+                        pause;continue
+                    fi
                 else 
                     echo -e "${RED}Hook script missing!${NC}"
                 fi
@@ -950,7 +1000,7 @@ do_manage_sources() {
         echo -n "Select option: "
         read -r MOPT
         case $MOPT in
-            a) echo -n "Paste new URL: "; read -r NEW_URL; if [ -n "$NEW_URL" ]; then eval "SOURCES_$TYPE=\"\$SOURCES_$TYPE $NEW_URL\""; save_config; echo -e "${GREEN}Added.${NC}"; sleep 1; fi ;;
+            a) echo -n "Paste new URL: "; read -r NEW_URL; if [[ "$NEW_URL" =~ ^https?://[a-zA-Z0-9._~:/?#@!%+=,\&-]+$ ]]; then eval "SOURCES_$TYPE=\"\$SOURCES_$TYPE $NEW_URL\""; save_config; echo -e "${GREEN}Added.${NC}"; sleep 1; fi ;;
             r) echo -n "Enter number to remove: "; read -r REM_NUM; if echo "$REM_NUM" | grep -qE '^[0-9]+$'; then NEW_LIST=""; curr=1; for url in $CURRENT_SOURCES; do [ "$curr" -ne "$REM_NUM" ] && NEW_LIST="$NEW_LIST $url"; curr=$((curr+1)); done; eval "SOURCES_$TYPE=\"$NEW_LIST\""; save_config; echo -e "${RED}Removed.${NC}"; sleep 1; fi ;;
             0) return ;;
         esac
@@ -1011,7 +1061,7 @@ do_health_check() {
     fi
     
     # Manual Blocklist IPv4 Status
-    CNT_MANUAL=$(ipset list Blacklist 2>/dev/null | grep -cE '^[0-9]')
+    CNT_MANUAL=$( { ipset list Blacklist 2>/dev/null;ipset list KTManualBan 2>/dev/null; } | grep -cE '^[0-9]')
     if ipset list Blacklist >/dev/null 2>&1; then 
         echo -e "   Manual Blocklist:   ${GREEN}ACTIVE${NC} (${CYAN}$CNT_MANUAL IPs${NC})"
     else 
@@ -1052,7 +1102,7 @@ do_health_check() {
         fi
         
         # Manual Blocklist IPv6 Status
-        CNT_MANUAL6=$(ipset list Blacklist6 2>/dev/null | grep -cE '^[0-9a-fA-F:]')
+        CNT_MANUAL6=$( { ipset list Blacklist6 2>/dev/null;ipset list KTManualBan6 2>/dev/null; } | grep -cE '^[0-9a-fA-F:]')
         if ipset list Blacklist6 >/dev/null 2>&1; then 
             echo -e "   Manual Blocklist6:  ${GREEN}ACTIVE${NC} (${CYAN}$CNT_MANUAL6 IPs${NC})"
         else 
@@ -1098,12 +1148,12 @@ do_health_check() {
 }
 
 # --- ACTIONS ---
-do_update() { echo -e "${YELLOW}Updating Blocklists...${NC}"; if [ -x "$SCRIPT_UPDATE" ]; then "$SCRIPT_UPDATE"; echo -e "${GREEN}Done.${NC}"; fi; pause; }
-do_stats() { echo -e "${YELLOW}Generating Stats & Dashboard...${NC}"; if [ -x "$SCRIPT_STATS" ]; then "$SCRIPT_STATS" force; echo -e "${GREEN}Done.${NC}"; fi; pause; }
+do_update() { echo -e "${YELLOW}Updating Blocklists...${NC}"; if [ -x "$SCRIPT_UPDATE" ]; then if "$SCRIPT_UPDATE"; then echo -e "${GREEN}Done.${NC}"; else echo -e "${RED}Failed: see output/logs.${NC}"; fi; fi; pause; }
+do_stats() { echo -e "${YELLOW}Generating Stats & Dashboard...${NC}"; if [ -x "$SCRIPT_STATS" ]; then if "$SCRIPT_STATS" force; then echo -e "${GREEN}Done.${NC}"; else echo -e "${RED}Failed: see output/logs.${NC}"; fi; fi; pause; }
 do_monitor() { if [ -x "$SCRIPT_MONITOR" ]; then "$SCRIPT_MONITOR"; else echo -e "${RED}Missing script${NC}"; pause; fi; }
-do_vpn() { if [ -x "$SCRIPT_VPN" ]; then "$SCRIPT_VPN"; echo -e "${GREEN}Done.${NC}"; fi; pause; }
+do_vpn() { if [ -x "$SCRIPT_VPN" ]; then if "$SCRIPT_VPN"; then echo -e "${GREEN}Done.${NC}"; else echo -e "${RED}Failed: see output/logs.${NC}"; fi; fi; pause; }
 do_report() { echo -e "${YELLOW}Sending Reports to AbuseIPDB...${NC}"; if [ -x "$SCRIPT_REPORTER" ]; then "$SCRIPT_REPORTER"; else echo -e "${RED}Reporter script missing${NC}"; fi; pause; }
-do_restart() { echo -e "${YELLOW}Restarting Firewall Hook (Applying Config)...${NC}"; if [ -x "$SCRIPT_HOOK" ]; then table=filter "$SCRIPT_HOOK"; echo -e "${GREEN}Done.${NC}"; else echo -e "${RED}Hook script missing${NC}"; fi; pause; }
+do_restart() { echo -e "${YELLOW}Restarting Firewall Hook (Applying Config)...${NC}"; if [ -x "$SCRIPT_HOOK" ]; then if table=filter "$SCRIPT_HOOK"; then echo -e "${GREEN}Done.${NC}"; else echo -e "${RED}Failed: see output/logs.${NC}"; fi; else echo -e "${RED}Hook script missing${NC}"; fi; pause; }
 
 # --- MAIN MENU ---
 while true; do
@@ -1146,3 +1196,4 @@ while true; do
         *) sleep 1 ;;
     esac
 done
+

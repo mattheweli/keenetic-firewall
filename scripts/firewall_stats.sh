@@ -1,4 +1,6 @@
-#!/bin/sh
+#!/opt/bin/bash
+# KEENETIC FIREWALL STATS v4.0.0
+# Release: 2026-10-22 | Stable. See CHANGELOG.md for release details.
 
 # ==============================================================================
 # KEENETIC FIREWALL STATS v3.7.2 (INTERACTIVE DASHBOARD)
@@ -30,7 +32,13 @@
 #     - CORE: Implemented robust "Linux Cooked" (SLL) header parsing for tcpdump.
 # ==============================================================================
 
-export PATH=/opt/bin:/opt/sbin:/usr/bin:/usr/sbin:/bin:/sbin
+export PATH=${KT_PATH:-/opt/bin:/opt/sbin:/usr/bin:/usr/sbin:/bin:/sbin}
+# Firewall Stats 4.0.0
+. "${KT_COMMON:-/opt/lib/keentool/common.sh}" || exit 1
+kt_init firewall-db || exit $?
+sqlite3() { kt_sqlite "$@"; }
+START_SECONDS=$SECONDS
+
 
 # ==============================================================================
 # 1. CONFIGURATION & PATHS
@@ -48,16 +56,51 @@ else
 fi
 
 # Database and File Paths
-DB_FILE="/opt/etc/firewall_stats.db"
+DB_FILE="${KT_FW_DB:-/opt/etc/firewall_stats.db}"
+# Explicit maintenance runs before kernel reads, PCAP consumption or dashboard publication.
+if [ "${1:-}" = --optimize-db ]; then
+    [ -f "$DB_FILE" ] && [ ! -L "$DB_FILE" ] || { echo 'Existing regular database required; no changes made' >&2;exit 1; }
+    [ "$(sqlite3 "$DB_FILE" 'PRAGMA quick_check;')" = ok ] || { echo 'Database integrity check failed; no changes made' >&2;exit 1; }
+    BACKUP_ROOT="${KT_FW_DB_BACKUPS:-/opt/var/backups/keentool-db}"
+    case "$BACKUP_ROOT" in *\"*|*\'*|*$'\n'*|*$'\r'*)echo 'Unsupported backup directory characters; no changes made' >&2;exit 1;;esac
+    mkdir -p "$BACKUP_ROOT" || exit 1
+    BACKUP_DIR=$(mktemp -d "$BACKUP_ROOT/$(date +%Y%m%d_%H%M%S)-$$.XXXXXX") || exit 1
+    chmod 700 "$BACKUP_DIR" || exit 1
+    DB_BACKUP="$BACKUP_DIR/firewall_stats.db"
+    sqlite3 "$DB_FILE" ".backup \"$DB_BACKUP\"" || { echo 'Online backup failed; no optimization performed' >&2;exit 1; }
+    chmod 600 "$DB_BACKUP" || exit 1
+    [ "$(sqlite3 "$DB_BACKUP" 'PRAGMA quick_check;')" = ok ] || { echo 'Backup verification failed; no optimization performed' >&2;exit 1; }
+    echo "Verified database backup: $DB_BACKUP"
+    # Refuse unexpected operator-defined indexes instead of overwriting their definition.
+    for INDEX_NAME in idx_list_ts idx_list_ts_ip;do
+        INDEX_TABLE=$(sqlite3 "$DB_FILE" "SELECT tbl_name FROM sqlite_master WHERE type='index' AND name='$INDEX_NAME';") || exit 1
+        [ -z "$INDEX_TABLE" ] && continue
+        INDEX_COLUMNS=$(sqlite3 "$DB_FILE" "SELECT group_concat(name, ',') FROM (SELECT name FROM pragma_index_info('$INDEX_NAME') ORDER BY seqno);") || exit 1
+        EXPECTED_COLUMNS='list_type,timestamp';[ "$INDEX_NAME" != idx_list_ts_ip ] || EXPECTED_COLUMNS='list_type,timestamp,ip'
+        INDEX_FLAGS=$(sqlite3 "$DB_FILE" "SELECT \"unique\" || '|' || partial FROM pragma_index_list('ip_drops') WHERE name='$INDEX_NAME';") || exit 1
+        [ "$INDEX_TABLE" = ip_drops ] && [ "$INDEX_COLUMNS" = "$EXPECTED_COLUMNS" ] && [ "$INDEX_FLAGS" = '0|0' ] || { echo "Unexpected index definition: $INDEX_NAME; no optimization performed" >&2;exit 1; }
+    done
+    sqlite3 "$DB_FILE" 'BEGIN IMMEDIATE; CREATE INDEX IF NOT EXISTS idx_list_ts ON ip_drops(list_type,timestamp); DROP INDEX IF EXISTS idx_list_ts_ip; COMMIT;' || { echo 'Index transaction failed; database backup retained' >&2;exit 1; }
+    sqlite3 "$DB_FILE" 'VACUUM;' || { echo 'Compaction failed or database busy; data retained, retry maintenance later. Backup retained.' >&2;exit 1; }
+    CHECKPOINT_RESULT=$(sqlite3 "$DB_FILE" 'PRAGMA wal_checkpoint(TRUNCATE);') || exit 1
+    case "$CHECKPOINT_RESULT" in 0\|*) :;;*) echo 'Active readers deferred WAL truncation; logical optimization is complete, disk reclamation may wait for readers to close.' >&2;;esac
+    [ "$(sqlite3 "$DB_FILE" 'PRAGMA integrity_check;')" = ok ] || { echo 'Final integrity check failed; retain backup and investigate' >&2;exit 1; }
+    echo 'Lossless optimization complete: no rows, timestamps, counters, port histories or report state removed.'
+    echo "Database size: $(du -h "$DB_FILE" | awk '{print $1}') (WAL sidecar, if any, is separate)"
+    echo 'The database backup is retained separately and still occupies disk space.'
+    exit 0
+fi
 BACKUP_FILE_V4="/opt/etc/firewall_blocklist.save"
 BACKUP_FILE_V6="/opt/etc/firewall_blocklist6.save"
 BACKUP_GEO_V4="/opt/etc/firewall_geoblock.save"
 BACKUP_MANUAL_V4="/opt/etc/Blacklist.backup"
 BACKUP_MANUAL_V6="/opt/etc/Blacklist6.backup"
-WEB_DIR="/opt/var/www/firewall"
+WEB_DIR="${KT_FW_WEB:-/opt/var/www/firewall}"
 LIST_DIR="$WEB_DIR/lists"
+PUBLISHED_LIST_DIR="$LIST_DIR"
+LIST_DIR="$WEB_DIR/.lists.$$"
 DATA_FILE="$WEB_DIR/firewall_data.js"
-TEMP_DATA_FILE="/tmp/fw_data_atomic.tmp"
+TEMP_DATA_FILE="$WEB_DIR/.fw_data.$$.tmp"
 HTML_FILE="$WEB_DIR/index.html"
 LOG_TAG="Firewall_Stats"
 
@@ -65,7 +108,7 @@ LOG_TAG="Firewall_Stats"
 AUTOBAN_SAVE_FILE="/opt/etc/firewall_autoban.save"
 
 # Sniffer buffer file
-PCAP_BASE="/tmp/fw_syn_ring.pcap"
+PCAP_BASE="${KT_FW_PCAP:-/opt/var/log/keentool-firewall/fw_syn_ring.pcap}"
 
 # Prepare SQL safe list for Honeypot ports
 ALL_TRAP_PORTS="$TCP_SERVICES $UDP_SERVICES"
@@ -74,9 +117,9 @@ TRAP_SQL_LIST=$(echo "$ALL_TRAP_PORTS" | tr -s ' ' ',' | sed 's/^,//;s/,$//')
 # Define Firewall Targets (IPv4/IPv6)
 IPTABLES_CMD="iptables"; IP6TABLES_CMD="ip6tables"
 if [ "$ENABLE_IPV6" = "true" ]; then
-    TARGETS="FirewallBlock|$IPTABLES_CMD| FirewallBlock6|$IP6TABLES_CMD|6 VPNBlock|$IPTABLES_CMD| GeoBlock|$IPTABLES_CMD| GeoBlock6|$IP6TABLES_CMD|6 Blacklist|$IPTABLES_CMD| Blacklist6|$IP6TABLES_CMD|6"
+    TARGETS="FirewallBlock|$IPTABLES_CMD| FirewallBlock6|$IP6TABLES_CMD|6 VPNBlock|$IPTABLES_CMD| GeoBlock|$IPTABLES_CMD| GeoBlock6|$IP6TABLES_CMD|6 Blacklist|$IPTABLES_CMD| Blacklist6|$IP6TABLES_CMD|6 KTManualBan|$IPTABLES_CMD| KTManualBan6|$IP6TABLES_CMD|6 AutoBan|$IPTABLES_CMD| AutoBan6|$IP6TABLES_CMD|6"
 else
-    TARGETS="FirewallBlock|$IPTABLES_CMD| VPNBlock|$IPTABLES_CMD| GeoBlock|$IPTABLES_CMD| Blacklist|$IPTABLES_CMD|"
+    TARGETS="FirewallBlock|$IPTABLES_CMD| VPNBlock|$IPTABLES_CMD| GeoBlock|$IPTABLES_CMD| Blacklist|$IPTABLES_CMD| KTManualBan|$IPTABLES_CMD| AutoBan|$IPTABLES_CMD|"
 fi
 
 # ==============================================================================
@@ -111,17 +154,19 @@ if [ -s "$KEY_FILE" ]; then ABUSEIPDB_KEY=$(cat "$KEY_FILE" | tr -d '[:space:]')
 # Ensure directories exist and clean old temp lists
 mkdir -p "$WEB_DIR"
 mkdir -p "$LIST_DIR"
+# Remove only the per-run staging directory on failure or normal completion.
+trap 'rm -rf "$LIST_DIR"; kt_cleanup' EXIT
 rm -f "$LIST_DIR"/*.txt
 
 # Date & Time variables
 DATE_CMD="/opt/bin/date"; [ ! -x "$DATE_CMD" ] && DATE_CMD="date"
-NOW=$($DATE_CMD +%s)
+NOW=${KT_NOW:-$($DATE_CMD +%s)}
 
 # Initialize counters for logging (Added NEW_DROPS_GEO and GEO6)
 NEW_DROPS_V4=0; NEW_DROPS_V6=0; NEW_DROPS_VPN=0; NEW_DROPS_TRAP=0; NEW_DROPS_TRAP6=0; NEW_DROPS_GEO=0; NEW_DROPS_GEO6=0; NEW_DROPS_MANUAL=0; NEW_DROPS_MANUAL6=0
 NEW_IP_RECORDS=0
 
-echo "=== Firewall Stats Updater v3.7.2 ==="
+echo "=== Firewall Stats Updater v4.0.0 ==="
 
 # ==============================================================================
 # 3. DATABASE INITIALIZATION & TUNING
@@ -145,7 +190,7 @@ else
     
     # 1. Check ip_drops for 'list_type' (CRITICAL FIX)
     HAS_LIST=$(sqlite3 "$DB_FILE" "PRAGMA table_info(ip_drops);" | grep list_type)
-    if [ -z "$HAS_LIST" ]; then
+    if [ -z "$HAS_LIST" ] && [ "$(sqlite3 "$DB_FILE" "SELECT type FROM sqlite_master WHERE name='ip_drops';")" = table ]; then
         echo " -> Migrating DB: Adding list_type column to ip_drops..."
         sqlite3 "$DB_FILE" "ALTER TABLE ip_drops ADD COLUMN list_type TEXT;"
         sqlite3 "$DB_FILE" "CREATE INDEX IF NOT EXISTS idx_list ON ip_drops(list_type);"
@@ -167,7 +212,7 @@ else
     
     # 4. Check for Performance Indexes (CPU 100% Fix)
     HAS_IDX_IP=$(sqlite3 "$DB_FILE" "PRAGMA index_list('ip_drops');" | grep "idx_ip")
-    if [ -z "$HAS_IDX_IP" ]; then
+    if [ -z "$HAS_IDX_IP" ] && [ "$(sqlite3 "$DB_FILE" "SELECT type FROM sqlite_master WHERE name='ip_drops';")" = table ]; then
         echo " -> Migrating DB: Adding performance index idx_ip..."
         sqlite3 "$DB_FILE" "CREATE INDEX IF NOT EXISTS idx_ip ON ip_drops(ip);"
     fi
@@ -178,13 +223,37 @@ else
         sqlite3 "$DB_FILE" "CREATE INDEX IF NOT EXISTS idx_port ON ip_info(target_port);"
     fi
 	
-	HAS_COMPOSITE=$(sqlite3 "$DB_FILE" "PRAGMA index_list('ip_drops');" | grep "idx_list_ts_ip")
-    if [ -z "$HAS_COMPOSITE" ]; then
-        echo " -> Migrating DB: Adding composite index idx_list_ts_ip..."
-        sqlite3 "$DB_FILE" "CREATE INDEX IF NOT EXISTS idx_list_ts_ip ON ip_drops(list_type, timestamp, ip);"
-    fi
+
 fi
 
+    # Keep existing installations unchanged until explicit --optimize-db maintenance.
+    # A compact index is sufficient because hit counts already require table access.
+    HAS_LIST_TIME=$(sqlite3 "$DB_FILE" "SELECT count(*) FROM sqlite_master WHERE type='index' AND tbl_name='ip_drops' AND name IN ('idx_list_ts','idx_list_ts_ip');")
+    if [ "$HAS_LIST_TIME" = 0 ]; then
+        echo " -> Adding compact list/time index idx_list_ts..."
+        sqlite3 "$DB_FILE" "CREATE INDEX IF NOT EXISTS idx_list_ts ON ip_drops(list_type,timestamp);"
+    fi
+
+# ==============================================================================
+if [ "${KT_FW_PREVIEW:-false}" != true ]; then
+# Snapshot expensive kernel dumps once; replay for all statistics consumers.
+ipset() {
+    if [ "$1" = list ] && [ "$#" = 2 ]; then
+        local snapshot="$KT_WORKDIR/ipset_$2"
+        if [ ! -f "$snapshot" ]; then command ipset "$@" > "$snapshot" || { rm -f "$snapshot"; return 1; }; fi
+        cat "$snapshot"
+    else command ipset "$@"; fi
+}
+iptables() { fw_chain_dump iptables "$@"; }
+ip6tables() { fw_chain_dump ip6tables "$@"; }
+fw_chain_dump() {
+    local tool=$1; shift
+    if [ "$1" = -L ]; then
+        local snapshot="$KT_WORKDIR/${tool}_$2"
+        if [ ! -f "$snapshot" ]; then command "$tool" "$@" > "$snapshot" || { rm -f "$snapshot"; return 1; }; fi
+        cat "$snapshot"
+    else command "$tool" "$@"; fi
+}
 # ==============================================================================
 # 4. COLLECT GLOBAL BLOCKLIST COUNTERS
 # ==============================================================================
@@ -198,8 +267,14 @@ for TARGET in $TARGETS; do
     LAST_RUN_FILE="/tmp/fw_last_${SET_NAME}.dat"
 
     # Read counters from iptables (Input + Forward chains)
-    C_IN_RAW=$($CMD -L "BLOCKLIST_IN${SUFFIX}" -v -x -n 2>/dev/null | grep -w "match-set $SET_NAME" | awk '{print $1}' | head -n 1)
-    C_FW_RAW=$($CMD -L "BLOCKLIST_FWD${SUFFIX}" -v -x -n 2>/dev/null | grep -w "match-set $SET_NAME" | awk '{print $1}' | head -n 1)
+    if [[ "$SET_NAME" = Blacklist* ]];then
+        # The legacy manual chain is shared by INPUT and FORWARD: count it once.
+        C_IN_RAW=$($CMD -L "BLACKLIST${SUFFIX}" -v -x -n 2>/dev/null | grep -w "match-set $SET_NAME" | awk '$3=="DROP"{print $1}' | head -n 1)
+        C_FW_RAW=0
+    else
+        C_IN_RAW=$($CMD -L "BLOCKLIST_IN${SUFFIX}" -v -x -n 2>/dev/null | grep -w "match-set $SET_NAME" | awk '$3=="DROP"{print $1}' | head -n 1)
+        C_FW_RAW=$($CMD -L "BLOCKLIST_FWD${SUFFIX}" -v -x -n 2>/dev/null | grep -w "match-set $SET_NAME" | awk '$3=="DROP"{print $1}' | head -n 1)
+    fi
     
     C_IN=${C_IN_RAW:-0}; C_FW=${C_FW_RAW:-0}
     CUR=$((C_IN + C_FW))
@@ -211,7 +286,10 @@ for TARGET in $TARGETS; do
     
     # Insert into DB if there are new drops
     if [ "$DELTA" -gt 0 ]; then
-        sqlite3 "$DB_FILE" "INSERT INTO drops (timestamp, list_name, count) VALUES ($NOW, '$SET_NAME', $DELTA);"
+        DB_LIST_NAME=$SET_NAME
+        [ "$SET_NAME" != KTManualBan ] || DB_LIST_NAME=Blacklist
+        [ "$SET_NAME" != KTManualBan6 ] || DB_LIST_NAME=Blacklist6
+        sqlite3 "$DB_FILE" "INSERT INTO drops (timestamp, list_name, count) VALUES ($NOW, '$DB_LIST_NAME', $DELTA);" || exit 1
         [ "$SET_NAME" = "FirewallBlock" ] && NEW_DROPS_V4=$DELTA
         [ "$SET_NAME" = "FirewallBlock6" ] && NEW_DROPS_V6=$DELTA
         [ "$SET_NAME" = "VPNBlock" ] && NEW_DROPS_VPN=$DELTA
@@ -219,8 +297,10 @@ for TARGET in $TARGETS; do
         [ "$SET_NAME" = "GeoBlock" ] && NEW_DROPS_GEO=$DELTA
         [ "$SET_NAME" = "GeoBlock6" ] && NEW_DROPS_GEO6=$DELTA
 		# Capture Manual drops
-        [ "$SET_NAME" = "Blacklist" ] && NEW_DROPS_MANUAL=$DELTA
-        [ "$SET_NAME" = "Blacklist6" ] && NEW_DROPS_MANUAL6=$DELTA
+        [[ "$SET_NAME" = Blacklist || "$SET_NAME" = KTManualBan ]] && NEW_DROPS_MANUAL=$((NEW_DROPS_MANUAL+DELTA))
+        [[ "$SET_NAME" = Blacklist6 || "$SET_NAME" = KTManualBan6 ]] && NEW_DROPS_MANUAL6=$((NEW_DROPS_MANUAL6+DELTA))
+        [ "$SET_NAME" != AutoBan ] || NEW_DROPS_TRAP=$((NEW_DROPS_TRAP+DELTA))
+        [ "$SET_NAME" != AutoBan6 ] || NEW_DROPS_TRAP6=$((NEW_DROPS_TRAP6+DELTA))
     fi
     echo "$CUR" > "$LAST_RUN_FILE"
     
@@ -234,17 +314,22 @@ done
 # ==============================================================================
 echo " -> Reading AutoBan Trap..."
 
+collect_trap_counter() {
+    local command=$1 suffix=$2 chain
+    for chain in "SCAN_TRAP$suffix" "FW_CHK_CONN$suffix" "FW_CHK_BRUTE$suffix";do "$command" -L "$chain" -v -x -n 2>/dev/null || :;done | awk '$3=="DROP"{sum+=$1}END{printf "%.0f\n",sum}'
+}
+
 # IPv4 Trap Processing
 LAST_RUN_FILE="/tmp/fw_last_trap.dat"
-C_TRAP_RAW=$($IPTABLES_CMD -L SCAN_TRAP -v -x -n 2>/dev/null | grep "DROP" | awk '{print $1}' | awk '{s+=$1} END {print s}')
+C_TRAP_RAW=$(collect_trap_counter "$IPTABLES_CMD" "")
 C_TRAP=${C_TRAP_RAW:-0}
 if [ -f "$LAST_RUN_FILE" ]; then LAST=$(cat "$LAST_RUN_FILE"); else LAST=0; fi
 LAST=${LAST:-0}
 if [ "$C_TRAP" -lt "$LAST" ]; then DELTA=$C_TRAP; else DELTA=$((C_TRAP - LAST)); fi
 
 if [ "$DELTA" -gt 0 ]; then
-    sqlite3 "$DB_FILE" "INSERT INTO drops (timestamp, list_name, count) VALUES ($NOW, 'AutoBan', $DELTA);"
-    NEW_DROPS_TRAP=$DELTA
+    sqlite3 "$DB_FILE" "INSERT INTO drops (timestamp, list_name, count) VALUES ($NOW, 'AutoBan', $DELTA);" || exit 1
+    NEW_DROPS_TRAP=$((NEW_DROPS_TRAP+DELTA))
 fi
 echo "$C_TRAP" > "$LAST_RUN_FILE"
 SIZE_AutoBan=$(ipset list AutoBan 2>/dev/null | grep -cE '^[0-9]')
@@ -254,15 +339,15 @@ SIZE_AutoBan=${SIZE_AutoBan:-0}
 SIZE_AutoBan6=0
 if [ "$ENABLE_IPV6" = "true" ]; then
     LAST_RUN_FILE="/tmp/fw_last_trap6.dat"
-    C_TRAP6_RAW=$($IP6TABLES_CMD -L SCAN_TRAP6 -v -x -n 2>/dev/null | grep "DROP" | awk '{print $1}' | awk '{s+=$1} END {print s}')
+    C_TRAP6_RAW=$(collect_trap_counter "$IP6TABLES_CMD" 6)
     C_TRAP6=${C_TRAP6_RAW:-0}
     if [ -f "$LAST_RUN_FILE" ]; then LAST=$(cat "$LAST_RUN_FILE"); else LAST=0; fi
     LAST=${LAST:-0}
     if [ "$C_TRAP6" -lt "$LAST" ]; then DELTA=$C_TRAP6; else DELTA=$((C_TRAP6 - LAST)); fi
 
     if [ "$DELTA" -gt 0 ]; then
-        sqlite3 "$DB_FILE" "INSERT INTO drops (timestamp, list_name, count) VALUES ($NOW, 'AutoBan6', $DELTA);"
-        NEW_DROPS_TRAP6=$DELTA
+        sqlite3 "$DB_FILE" "INSERT INTO drops (timestamp, list_name, count) VALUES ($NOW, 'AutoBan6', $DELTA);" || exit 1
+        NEW_DROPS_TRAP6=$((NEW_DROPS_TRAP6+DELTA))
     fi
     echo "$C_TRAP6" > "$LAST_RUN_FILE"
     SIZE_AutoBan6=$(ipset list AutoBan6 2>/dev/null | grep -cE '^[0-9a-fA-F]{1,4}:')
@@ -295,7 +380,9 @@ DIFF_TRAP6=$(calc_diff "$SIZE_AutoBan6" "$TRAP6_SIZE_FILE" "$DIFF_FILE_TRAP6")
 DIFF_GEO=$(read_file "$DIFF_FILE_GEO")
 if [ "$ENABLE_IPV6" = "true" ]; then DIFF_GEO6=$(read_file "$DIFF_FILE_GEO6"); else DIFF_GEO6="=0"; fi
 
-#Calculate diffs for Manual Blocklists
+SIZE_Blacklist=$(( ${SIZE_Blacklist:-0} + ${SIZE_KTManualBan:-0} ))
+SIZE_Blacklist6=$(( ${SIZE_Blacklist6:-0} + ${SIZE_KTManualBan6:-0} ))
+# Calculate diffs for all manual blocklists
 DIFF_MANUAL=$(calc_diff "$SIZE_Blacklist" "$MANUAL_SIZE_FILE" "$DIFF_FILE_MANUAL")
 DIFF_MANUAL6=$(calc_diff "$SIZE_Blacklist6" "$MANUAL6_SIZE_FILE" "$DIFF_FILE_MANUAL6")
 
@@ -303,8 +390,8 @@ DIFF_MANUAL6=$(calc_diff "$SIZE_Blacklist6" "$MANUAL6_SIZE_FILE" "$DIFF_FILE_MAN
 # 7. IP PACKET PROCESSING (PER-IP HITS)
 # ==============================================================================
 echo " -> Processing Per-IP stats..."
-CURRENT_DUMP="/tmp/ipset_dump_now.dat"
-SQL_IMPORT="/tmp/ip_inserts.sql"
+CURRENT_DUMP="$KT_WORKDIR/ipset_dump_now.dat"
+SQL_IMPORT="$KT_WORKDIR/ip_inserts.sql"
 : > "$CURRENT_DUMP"
 
 # Dump active ipsets to temporary file
@@ -316,6 +403,7 @@ SQL_IMPORT="/tmp/ip_inserts.sql"
     ipset list GeoBlock 2>/dev/null | grep "packets" | sed -n 's/^\([^ ]*\) .*packets \([0-9]*\) .*/\1 \2 geo/p' | awk '$2 > 0'
 	# Dump Manual IPv4
     ipset list Blacklist 2>/dev/null | grep "packets" | sed -n 's/^\([^ ]*\) .*packets \([0-9]*\) .*/\1 \2 manual/p' | awk '$2 > 0'
+    ipset list KTManualBan 2>/dev/null | grep "packets" | sed -n 's/^\([^ ]*\) .*packets \([0-9]*\) .*/\1 \2 manual/p' | awk '$2 > 0'
     if [ "$ENABLE_IPV6" = "true" ]; then
         ipset list FirewallBlock6 2>/dev/null | grep "packets" | sed -n 's/^\([^ ]*\) .*packets \([0-9]*\) .*/\1 \2 main/p' | awk '$2 > 0'
         ipset list AutoBan6 2>/dev/null | grep -E ':' | sed -n 's/^\([^ ]*\) .*packets \([0-9]*\) .*/\1 \2 trap/p' | awk '$2 > 0'
@@ -323,8 +411,9 @@ SQL_IMPORT="/tmp/ip_inserts.sql"
         ipset list GeoBlock6 2>/dev/null | grep "packets" | sed -n 's/^\([^ ]*\) .*packets \([0-9]*\) .*/\1 \2 geo/p' | awk '$2 > 0'
 		# Dump Manual IPv6
         ipset list Blacklist6 2>/dev/null | grep "packets" | sed -n 's/^\([^ ]*\) .*packets \([0-9]*\) .*/\1 \2 manual/p' | awk '$2 > 0'
+        ipset list KTManualBan6 2>/dev/null | grep "packets" | sed -n 's/^\([^ ]*\) .*packets \([0-9]*\) .*/\1 \2 manual/p' | awk '$2 > 0'
     fi
-} | sort > "$CURRENT_DUMP"
+} | awk '{key=$1 SUBSEP $3;ips[key]=$1;types[key]=$3;hits[key]+=$2}END{for(key in hits)print ips[key],hits[key],types[key]}' | sort > "$CURRENT_DUMP"
 
 # Calculate deltas for IPs (New Hits = Current Packets - Previous Packets)
 DB_IS_EMPTY=$(sqlite3 "$DB_FILE" "SELECT count(*) FROM ip_drops;")
@@ -333,27 +422,29 @@ DB_IS_EMPTY=$(sqlite3 "$DB_FILE" "SELECT count(*) FROM ip_drops;")
 if [ ! -f "$IP_LAST_STATE" ] || [ "$DB_IS_EMPTY" -eq 0 ]; then
     awk -v now="$NOW" '{printf "INSERT INTO ip_drops (timestamp, ip, count, list_type) VALUES (%d, \"%s\", %d, \"%s\");\n", now, $1, $2, $3;}' "$CURRENT_DUMP" > "$SQL_IMPORT"
 else
-    awk -v now="$NOW" 'FNR==NR { old[$1] = $2; next } { prev = (old[$1] ? old[$1] : 0); curr = $2; delta = curr - prev; if (delta < 0) delta = curr; if (delta > 0) printf "INSERT INTO ip_drops (timestamp, ip, count, list_type) VALUES (%d, \"%s\", %d, \"%s\");\n", now, $1, delta, $3; }' "$IP_LAST_STATE" "$CURRENT_DUMP" > "$SQL_IMPORT"
+    awk -v now="$NOW" 'FNR==NR { old[$1 SUBSEP $3] = $2; next } { key=$1 SUBSEP $3; prev = (old[key] ? old[key] : 0); curr = $2; delta = curr - prev; if (delta < 0) delta = curr; if (delta > 0) printf "INSERT INTO ip_drops (timestamp, ip, count, list_type) VALUES (%d, \"%s\", %d, \"%s\");\n", now, $1, delta, $3; }' "$IP_LAST_STATE" "$CURRENT_DUMP" > "$SQL_IMPORT"
 fi
-awk '{print $1, $2}' "$CURRENT_DUMP" > "$IP_LAST_STATE"
+cp "$CURRENT_DUMP" "$KT_WORKDIR/ip_next_state"
 
 # Bulk Insert into DB
 if [ -s "$SQL_IMPORT" ]; then
     NEW_IP_RECORDS=$(wc -l < "$SQL_IMPORT")
-    (echo "BEGIN TRANSACTION;"; cat "$SQL_IMPORT"; echo "COMMIT;") | sqlite3 "$DB_FILE"
+    (echo "BEGIN TRANSACTION;"; cat "$SQL_IMPORT"; echo "COMMIT;") | sqlite3 "$DB_FILE" || exit 1
 fi
+mv "$KT_WORKDIR/ip_next_state" "$IP_LAST_STATE"
 rm "$CURRENT_DUMP" "$SQL_IMPORT" 2>/dev/null
 
 # ==============================================================================
 # 8. SNIFFER PARSER (ULTRA-OPTIMIZED: INCREMENTAL + SELECTIVE DB CACHE)
 # ==============================================================================
-PCAP_BASE="/tmp/fw_syn_ring.pcap"
-DB_CACHE="/tmp/fw_db_cache.dat"
-UNIQUE_TRAFFIC="/tmp/fw_unique_traffic.dat"
-LAST_TS_FILE="/tmp/fw_pcap_last_ts.dat"
-ACTIVE_IPS="/tmp/fw_active_ips.dat"
+PCAP_BASE="${KT_FW_PCAP:-/opt/var/log/keentool-firewall/fw_syn_ring.pcap}"
+DB_CACHE="$KT_WORKDIR/fw_db_cache.dat"
+UNIQUE_TRAFFIC="$KT_WORKDIR/fw_unique_traffic.dat"
+LAST_TS_FILE="${KT_FW_PCAP_CURSOR:-/opt/etc/keentool/fw_pcap_last_ts.dat}"
+NEXT_TS_FILE="$KT_WORKDIR/pcap_next_ts"
+ACTIVE_IPS="$KT_WORKDIR/fw_active_ips.dat"
 
-LOG_BUFFER=$(ls ${PCAP_BASE}* 2>/dev/null | head -n 1)
+LOG_BUFFER="$PCAP_BASE" # do not replay already processed rotation segments
 
 if [ -n "$LOG_BUFFER" ] && [ -s "$LOG_BUFFER" ]; then
     echo " -> 🕵️ Processing WAN Sniffer Buffer (Incremental)..."
@@ -362,7 +453,8 @@ if [ -n "$LOG_BUFFER" ] && [ -s "$LOG_BUFFER" ]; then
     if [ -f "$LAST_TS_FILE" ]; then LAST_TS=$(cat "$LAST_TS_FILE"); else LAST_TS=0; fi
     
     # 2. PHASE 1: Parse PCAP & Deduplicate (Only NEW packets)
-    tcpdump -tt -r "$LOG_BUFFER" -nn 2>/dev/null | awk -v last_ts="$LAST_TS" '
+    cp "$LOG_BUFFER" "$KT_WORKDIR/capture.pcap" || exit 1
+    tcpdump -tt -r "$KT_WORKDIR/capture.pcap" -nn 2>/dev/null | awk -v last_ts="$LAST_TS" '
     BEGIN { 
         max_ts_num = last_ts + 0; 
         max_ts_str = last_ts; 
@@ -414,7 +506,7 @@ if [ -n "$LOG_BUFFER" ] && [ -s "$LOG_BUFFER" ]; then
     }
     END { 
         # Print the pure string, bypassing the BusyBox formatting bug
-        print max_ts_str > "'"$LAST_TS_FILE"'" 
+        print max_ts_str > "'"$NEXT_TS_FILE"'" 
     }' | sort -u > "$UNIQUE_TRAFFIC"
 
     TRAFFIC_COUNT=$(wc -l < "$UNIQUE_TRAFFIC")
@@ -427,16 +519,16 @@ if [ -n "$LOG_BUFFER" ] && [ -s "$LOG_BUFFER" ]; then
         awk -F"|" '{print $1}' "$UNIQUE_TRAFFIC" | sort -u > "$ACTIVE_IPS"
         
         # Create a temporary table in SQLite to extract ONLY the history of those active IPs
-        echo "CREATE TEMP TABLE active_ips (ip TEXT PRIMARY KEY);" > /tmp/query.sql
-        awk '{print "INSERT INTO active_ips VALUES (\047" $1 "\047);"}' "$ACTIVE_IPS" >> /tmp/query.sql
+        echo "CREATE TEMP TABLE active_ips (ip TEXT PRIMARY KEY);" > $KT_WORKDIR/query.sql
+        awk '{print "INSERT INTO active_ips VALUES (\047" $1 "\047);"}' "$ACTIVE_IPS" >> $KT_WORKDIR/query.sql
         
         # [CPU FIX: Rimosso il JOIN mostruoso con ip_drops, query istantanea]
-        echo "SELECT a.ip, IFNULL(i.port_history, '') FROM active_ips a LEFT JOIN ip_info i ON a.ip = i.ip;" >> /tmp/query.sql
+        echo "SELECT a.ip, IFNULL(i.port_history, '') FROM active_ips a LEFT JOIN ip_info i ON a.ip = i.ip;" >> $KT_WORKDIR/query.sql
         
-        sqlite3 -separator "|" "$DB_FILE" < /tmp/query.sql > "$DB_CACHE"
+        sqlite3 -separator "|" "$DB_FILE" < $KT_WORKDIR/query.sql > "$DB_CACHE"
         
         # 4. PHASE 3: Cross-Reference & Generate SQL for the update
-        echo "BEGIN TRANSACTION;" > /tmp/port_update.sql
+        echo "BEGIN TRANSACTION;" > $KT_WORKDIR/port_update.sql
         
         awk -F"|" -v now="$NOW" '
         FNR==NR {
@@ -458,7 +550,7 @@ if [ -n "$LOG_BUFFER" ] && [ -s "$LOG_BUFFER" ]; then
                     cand = candidates[i]
                     split(cand, p, "/")
                     
-                    if (index(final_hist, cand) == 0) {
+                    if (index("," final_hist ",", "," cand ",") == 0) {
                         if (final_hist == "") { final_hist = cand }
                         else { final_hist = final_hist "," cand }
                         is_modified = 1; last_port = p[1];
@@ -470,24 +562,25 @@ if [ -n "$LOG_BUFFER" ] && [ -s "$LOG_BUFFER" ]; then
                 if (is_modified) {
                     if (last_port !~ /^[0-9]+$/) { last_port = 0; }
                     
-                    printf "UPDATE ip_info SET target_port=%d, port_history=\047%s\047, updated=%d WHERE ip=\047%s\047;\n", last_port, final_hist, now, db_ip;
+                    printf "INSERT OR IGNORE INTO ip_info(ip) VALUES(\047%s\047); UPDATE ip_info SET target_port=%d, port_history=\047%s\047, updated=%d WHERE ip=\047%s\047;\n", db_ip, last_port, final_hist, now, db_ip;
                     updates++
                 }
             }
         }
         END { print "    [DEBUG] Updated " (updates+0) " DB records." > "/dev/stderr"; }
-        ' "$UNIQUE_TRAFFIC" "$DB_CACHE" >> /tmp/port_update.sql
+        ' "$UNIQUE_TRAFFIC" "$DB_CACHE" >> $KT_WORKDIR/port_update.sql
         
-        echo "COMMIT;" >> /tmp/port_update.sql
+        echo "COMMIT;" >> $KT_WORKDIR/port_update.sql
 
         # 5. Execute the database update
-        sqlite3 "$DB_FILE" < /tmp/port_update.sql
+        sqlite3 "$DB_FILE" < $KT_WORKDIR/port_update.sql
     else
         echo "    [DEBUG] No new traffic since last run."
     fi
     
+    [ ! -f "$NEXT_TS_FILE" ] || mv "$NEXT_TS_FILE" "$LAST_TS_FILE"
     # Cleanup temporary files
-    rm -f "/tmp/port_update.sql" "$DB_CACHE" "$UNIQUE_TRAFFIC" "$ACTIVE_IPS" "/tmp/query.sql" 2>/dev/null
+    rm -f "$KT_WORKDIR/port_update.sql" "$DB_CACHE" "$UNIQUE_TRAFFIC" "$ACTIVE_IPS" "$KT_WORKDIR/query.sql" 2>/dev/null
     
     # --- ULOGD PCAP AUTO-ROTATION (REAL-TIME) ---
     # Check file size (Limit: ~10 MB = 10485760 bytes)
@@ -495,8 +588,10 @@ if [ -n "$LOG_BUFFER" ] && [ -s "$LOG_BUFFER" ]; then
     PCAP_SIZE=$(wc -c < "$LOG_BUFFER" 2>/dev/null)
     if [ -n "$PCAP_SIZE" ] && [ "$PCAP_SIZE" -gt 10485760 ]; then
         echo " -> Rotating oversized PCAP file ($PCAP_SIZE bytes)..."
-        rm -f "$LOG_BUFFER"
+        mv "$LOG_BUFFER" "${LOG_BUFFER}.processed.$NOW"
         killall -HUP ulogd 2>/dev/null
+        # Already processed segment remains available for diagnostics until next run.
+        find "$(dirname "$PCAP_BASE")" -name 'fw_syn_ring.pcap.processed.*' -mmin +1440 -delete 2>/dev/null || :
         echo "0" > "$LAST_TS_FILE" # Reset the time bookmark
     fi
     # ---------------------------------
@@ -505,23 +600,24 @@ else
 fi
 
 # ==============================================================================
+fi
 # 9. GENERATE JSON DATA FOR DASHBOARD (ATOMIC WRITE)
 # ==============================================================================
 echo " -> Generating JS Data..."
 TOTAL_DROPS_ALL_TIME=$(sqlite3 "$DB_FILE" "SELECT sum(count) FROM drops;")
 [ -z "$TOTAL_DROPS_ALL_TIME" ] && TOTAL_DROPS_ALL_TIME="0"
 
+time_cache_name() { case "$1" in *%H:00*)echo hourly;;*%d-%m-%Y*)echo daily;;*%m-%Y*)echo monthly;;*)echo yearly;;esac; }
 # Helper to generate Time Series Rows
 gen_html_rows() {
     QUERY="SELECT $1, SUM(CASE WHEN list_name='FirewallBlock' THEN count ELSE 0 END), SUM(CASE WHEN list_name='FirewallBlock6' THEN count ELSE 0 END), SUM(CASE WHEN list_name='VPNBlock' THEN count ELSE 0 END), SUM(CASE WHEN list_name='AutoBan' OR list_name='AutoBan6' THEN count ELSE 0 END), SUM(CASE WHEN list_name='GeoBlock' OR list_name='GeoBlock6' THEN count ELSE 0 END), SUM(count) FROM drops $3 GROUP BY $2 ORDER BY MAX(timestamp) DESC;"
-    sqlite3 -separator "|" "$DB_FILE" "$QUERY" | awk -F'|' '{print "<tr><td>"$1"</td><td class=\"num col-main\">+"$2"</td><td class=\"num col-v6\">+"$3"</td><td class=\"num col-vpn\">+"$4"</td><td class=\"num col-trap\">+"$5"</td><td class=\"num col-geo\">+"$6"</td><td class=\"num\">+"$7"</td></tr>"}'
+    cat "$KT_WORKDIR/render/time_$(time_cache_name "$1").rows" | awk -F'|' '{print "<tr><td>"$1"</td><td class=\"num col-main\">+"$2"</td><td class=\"num col-v6\">+"$3"</td><td class=\"num col-vpn\">+"$4"</td><td class=\"num col-trap\">+"$5"</td><td class=\"num col-geo\">+"$6"</td><td class=\"num\">+"$7"</td></tr>"}'
 }
 
 # Helper to get Averages
 get_avg() {
-    QUERY="SELECT AVG(total) FROM (SELECT SUM(count) as total FROM drops $2 GROUP BY $1);"
-    RES=$(sqlite3 "$DB_FILE" "$QUERY")
-    echo "$RES" | awk '{printf "%.0f", $1}'
+    awk -F'|' '{sum+=$7;n++}END{printf "%.0f",(n?sum/n:0)}' "$KT_WORKDIR/render/time_$(time_cache_name "$1").rows"
+
 }
 
 
@@ -529,7 +625,7 @@ get_avg() {
 get_ip_table() {
     WHERE=$1; TYPE=$2
     
-    # [CPU FIX: Aggrega i Top 10 PRIMA di fare il JOIN, con alias 'd' corretto!]
+    # Aggregate the top 10 before joining metadata; retain the correct d alias.
     QUERY="SELECT sub.ip, sub.total, i.country, i.risk, i.domain, i.target_port, sub.list_type, i.port_history 
            FROM (
                SELECT d.ip, SUM(d.count) as total, d.list_type 
@@ -544,77 +640,38 @@ get_ip_table() {
            ) 
            ORDER BY sub.total DESC;"
     
-    sqlite3 -separator "|" "$DB_FILE" "$QUERY" | while IFS='|' read -r IP COUNT CO SC DO PORT TYPE PHIST; do
+    while IFS='|' read -r IP COUNT CO SC DO PORT TYPE PHIST; do
         CLEAN_IP=$(echo "$IP" | cut -d'/' -f1)
-        if [ -z "$CO" ] && [ -n "$ABUSEIPDB_KEY" ]; then
-            # 1. Lifesaver filter: ignore private, loopback, and Multicast IPs
-            if echo "$CLEAN_IP" | grep -qE '^(192\.168|10\.|172\.(1[6-9]|2[0-9]|3[0-1])|127\.|0\.|255\.|224\.|::1|fe80:)'; then
-                CO="LAN"; SC=0; DO="Local/Private/Spoofed"
-            
-            # 2. Anti-Churn filter: ignore IPs with fewer than 5 hits (prevents background noise from draining API)
-            elif [ "$COUNT" -lt 5 ]; then
-                CO="--"; SC=0; DO="Skipped (Low Volume)"
-            
-            else
-                # 3. Query AbuseIPDB only for real Public IPs with >= 5 hits
-                J=$(curl -s -m 1 -G https://api.abuseipdb.com/api/v2/check --data-urlencode "ipAddress=$CLEAN_IP" -d maxAgeInDays=90 -H "Key: $ABUSEIPDB_KEY" -H "Accept: application/json" || echo "")
-                CO=$(echo "$J"|grep -o '"countryCode":"[^"]*"'|cut -d'"' -f4)
-                SC=$(echo "$J"|grep -o '"abuseConfidenceScore":[0-9]*'|cut -d':' -f2)
-                DO=$(echo "$J"|grep -o '"domain":"[^"]*"'|cut -d'"' -f4)
-                
-                # 4. Anti-Loop Patch: If AbuseIPDB fails (Rate Limit, Timeout, or 404)
-                if [ -z "$CO" ]; then 
-                    CO="XX"; SC=0; DO="Rate Limited/Unknown"
-                fi
-            fi
-            
-            # 5. Sanitize strings for SQLite to prevent SQL Injection breaking the INSERT
-            DO_SAFE=$(echo "$DO" | sed "s/'/''/g")
-            PHIST_SAFE=$(echo "$PHIST" | sed "s/'/''/g")
-            
-            # 6. ALWAYS save the result to break the infinite query loop
-            sqlite3 "$DB_FILE" "INSERT OR REPLACE INTO ip_info (ip, country, risk, domain, updated, target_port, port_history) VALUES ('$CLEAN_IP', '$CO', ${SC:-0}, '$DO_SAFE', $NOW, ${PORT:-NULL}, '$PHIST_SAFE');"
-        fi
-        
+        CO=${CO:---}; DO=${DO:-Metadata pending}; SC=${SC:-0}
+        DO=$(printf '%s' "$DO" | sed 's/\&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g; s/"/\&quot;/g')
         SC=${SC:-0}; [ "$SC" -ge 50 ] && ST="color:var(--red);font-weight:bold;" || ST="color:var(--green);"
         BADGE_HTML=""; if [ "$2" = "1" ]; then if [ "$TYPE" = "trap" ]; then BADGE_HTML="<span class='list-badge lb-trap'>TRAP</span>"; else BADGE_HTML="<span class='list-badge lb-main'>MAIN</span>"; fi; fi
         
-        PORT_HTML=""
-        STYLE_TCP="background:#333;color:#fff;font-size:11px;margin-right:2px;padding:1px 4px;border-radius:3px;"
-        STYLE_UDP="background:#0d6efd;color:#fff;font-size:11px;margin-right:2px;padding:1px 4px;border-radius:3px;"
-        STYLE_MORE="background:#6c757d;color:#fff;font-size:11px;cursor:help;padding:1px 4px;border-radius:3px;"
-
-        if [ -n "$PHIST" ]; then
-            PHIST_SPACE=$(echo "$PHIST" | tr ',' ' ')
-            P_COUNT=$(echo "$PHIST_SPACE" | wc -w)
-            LIMIT=3; CTR=0
-            for p in $PHIST_SPACE; do
-                if [ "$CTR" -lt "$LIMIT" ]; then
-                    if echo "$p" | grep -q "/udp"; then CURR_STYLE="$STYLE_UDP"; else CURR_STYLE="$STYLE_TCP"; fi
-                    PORT_HTML="${PORT_HTML}<span class='list-badge' style='${CURR_STYLE}'>:$p</span>"
-                fi
-                CTR=$((CTR+1))
-            done
-            if [ "$P_COUNT" -gt "$LIMIT" ]; then 
-                REM=$((P_COUNT - LIMIT)); START_CUT=$((LIMIT + 1))
-                
-                # OPTIMIZATION: Limit tooltip length to Avoid JS bloat
-                MAX_TT=100
-                if [ "$REM" -gt "$MAX_TT" ]; then
-                    END_CUT=$((LIMIT + MAX_TT))
-                    HIDDEN_LIST=$(echo "$PHIST_SPACE" | cut -d' ' -f${START_CUT}-${END_CUT} | sed 's/ /, /g')
-                    HIDDEN_LIST="${HIDDEN_LIST}, ..."
-                else
-                    HIDDEN_LIST=$(echo "$PHIST_SPACE" | cut -d' ' -f${START_CUT}- | sed 's/ /, /g')
-                fi
-                
-                PORT_HTML="${PORT_HTML}<span class='list-badge' style='${STYLE_MORE}' title='Other ports: $HIDDEN_LIST'>(+$REM)</span>"
-            fi
-        elif [ -n "$PORT" ] && [ "$PORT" != "0" ]; then
-            PORT_HTML="<span class='list-badge' style='${STYLE_TCP}'>:$PORT</span>"
+        PORT_KEY=$(printf '%s' "$CLEAN_IP" | sha256sum | awk '{print $1}')
+        PORT_CACHE="$KT_WORKDIR/port_html_$PORT_KEY"
+        if [ ! -f "$PORT_CACHE" ]; then
+            printf '%s|%s\n' "$PORT" "$PHIST" | awk -F'|' -v listdir="$LIST_DIR" -v key="$PORT_KEY" -v ip="$CLEAN_IP" '
+            {
+              total=split($2,raw,",");n=0;out="";
+              for(j=1;j<=total;j++) {
+                value=tolower(raw[j]);gsub(/^[ \t]+|[ \t]+$/,"",value);split(value,p,"/");
+                if(value ~ /^[0-9]+(\/(tcp|udp))?$/ && p[1]+0>=1 && p[1]+0<=65535)a[++n]=value;
+              }
+              if(n==0 && $1+0>0)out="<span class=\"list-badge\">:"$1"</span>";
+              for(j=1;j<=n && j<=3;j++)out=out "<span class=\"list-badge\" style=\"background:"(a[j]~/\/udp$/?"#0d6efd":"#333")";color:#fff\">:"a[j]"</span>";
+              if(n>3) {
+                filename="ipports_"key".txt";path=listdir "/" filename;tip="";
+                for(j=1;j<=n;j++)print a[j] > path;
+                close(path);
+                for(j=4;j<=n && j<=103;j++)tip=tip sprintf("%s%s",(j>4?", ":""),a[j]);if(n>103)tip=tip", ...";
+                out=out "<button type=\"button\" class=\"list-badge port-more\" data-port-list=\""filename"\" data-ip=\""ip"\" onclick=\"showPorts(this)\" title=\"Other ports: "tip"\" aria-label=\"Show all "n" targeted ports\">(+"(n-3)")</button>";
+              }
+              print out;
+            }' > "$PORT_CACHE" || { rm -f "$PORT_CACHE";return 1; }
         fi
-       echo "<tr><td><span class='badge bg-danger'>$COUNT</span></td><td><a href='https://www.abuseipdb.com/check/$CLEAN_IP' target='_blank'>$IP</a> $BADGE_HTML <a href='#' onclick='unbanIP(\"$CLEAN_IP\"); return false;' title='Quick Unban' style='font-size: 14px; margin-left: 5px; text-decoration: none;'>🔓</a><br> $PORT_HTML</td><td class='meta'><span style='$ST'>Risk: ${SC}%</span> - $CO<br><small>$DO</small></td></tr>"
-    done
+        PORT_HTML=$(cat "$PORT_CACHE")
+       echo "<tr><td><span class='badge bg-danger'>$COUNT</span></td><td><a href='https://www.abuseipdb.com/check/$CLEAN_IP' target='_blank'>$IP</a> $BADGE_HTML <a href='#' data-admin-only hidden onclick='unbanIP(\"$CLEAN_IP\"); return false;' title='Quick Unban' style='font-size: 14px; margin-left: 5px; text-decoration: none;'>🔓</a><br> $PORT_HTML</td><td class='meta'><span style='$ST'>Risk: ${SC}%</span> - $CO<br><small>$DO</small></td></tr>"
+    done < "$KT_WORKDIR/render/ip_$3.rows"
 }
 
 # Function: Generate Port Stats (Real Protocol from DB)
@@ -644,7 +701,7 @@ get_port_stats() {
            ORDER BY total DESC 
            LIMIT 10;"
     
-    sqlite3 -separator "|" "$DB_FILE" "$QUERY" | awk -F'|' -v listdir="$LIST_DIR" -v prefix="$ID_PREFIX" -v q="'" '
+    cat "$KT_WORKDIR/render/port_$ID_PREFIX.rows" | awk -F'|' -v listdir="$LIST_DIR" -v prefix="$ID_PREFIX" -v q="'" '
     {
         full_port=$1; ips_raw=$2; count=$3;
         
@@ -652,7 +709,7 @@ get_port_stats() {
         split(full_port, a, "/"); port_num = a[1];
         
         gsub(/[ \t\r\n]+/, "", ips_raw); 
-        filename = prefix "_" port_num ".txt"; filepath = listdir "/" filename;
+        proto=a[2]; if(proto=="")proto="unknown"; filename = prefix "_" port_num "_" proto ".txt"; filepath = listdir "/" filename;
         split(ips_raw, ip_array, ","); 
         
         ips_formatted = ips_raw;
@@ -676,13 +733,59 @@ get_port_stats() {
     }'
 }
 
+# Export geography from all recorded IP counters, independently of top-10 tables.
+get_geo_data() {
+    local period seconds condition
+    {
+        echo '.bail on'
+        echo '.separator |'
+        echo 'BEGIN;'
+        for period in 24h 30d 1y all; do
+            case "$period" in 24h) seconds=86400;;30d) seconds=2592000;;1y) seconds=31536000;;all) seconds=0;;esac
+            condition="d.timestamp > $((NOW - seconds))"
+            [ "$period" != all ] || condition='1=1'
+            echo ".output $KT_WORKDIR/render/map_$period.rows"
+            echo "SELECT d.ip, SUM(d.count), UPPER(IFNULL(i.country,'')), COALESCE(NULLIF(i.port_history,''),i.target_port,'') FROM ip_drops d LEFT JOIN ip_info i ON i.ip=CASE WHEN INSTR(d.ip,'/')>0 THEN SUBSTR(d.ip,1,INSTR(d.ip,'/')-1) ELSE d.ip END WHERE $condition GROUP BY d.ip ORDER BY SUM(d.count) DESC,d.ip;"
+        done
+        echo 'COMMIT;'
+    } > "$KT_WORKDIR/map-export.sql"
+    sqlite3 "$DB_FILE" < "$KT_WORKDIR/map-export.sql" || return 1
+    printf '{'
+    local sep=''
+    for period in 24h 30d 1y all; do
+        printf '%s"%s":' "$sep" "$period"; sep=,
+        awk -F'|' '
+        BEGIN {total=0}
+        $2 ~ /^[0-9]+$/ && $2+0>0 {
+            cc=$3; if(cc !~ /^[A-Z][A-Z]$/ || cc=="XX" || cc=="ZZ")cc="unknown";
+            hits=$2+0; counts[cc]+=hits; total+=hits; sources[cc]++;
+            if(shown[cc]<100 && $1 ~ /^[0-9a-fA-F:.\/]+$/) {
+                ports=""; n=split($4,a,","); used=0;
+                for(j=1;j<=n && used<12;j++)if(a[j] ~ /^[0-9]+\/(tcp|udp)$/ || a[j] ~ /^[0-9]+$/){ports=ports (used?", ":"") a[j];used++}
+                if(n>12)ports=ports ", ...";
+                rows[cc]=rows[cc] (shown[cc]?",":"") "{\"ip\":\"" $1 "\",\"hits\":" sprintf("%.0f",hits) ",\"ports\":\"" ports "\"}";
+                shown[cc]++;
+            }
+        }
+        END {
+            printf "{\"total\":%.0f,\"countries\":{",total; sep="";
+            for(cc in counts){printf "%s\"%s\":{\"hits\":%.0f,\"sources\":%d,\"rows\":[%s]}",sep,cc,counts[cc],sources[cc],rows[cc];sep=","}
+            printf "}}";
+        }' "$KT_WORKDIR/render/map_$period.rows" || return 1
+    done
+    printf '}'
+}
+
 # --- Execute Data Generation ---
 
+# Prepare all 28 raw result sets in one SQLite session (one consistent read snapshot).
+. "${KT_RENDER_LIB:-/opt/lib/keentool/render_cache.sh}"
+prepare_render_cache "$DB_FILE" "$KT_WORKDIR/render" "$NOW" "$TCP_SERVICES" "$UDP_SERVICES" || exit 1
 # Port Tables
-PORTS_24H=$(get_port_stats 86400 "" "p24")
-PORTS_30D=$(get_port_stats 2592000 "" "p30")
-PORTS_1Y=$(get_port_stats 31536000 "" "p1y")
-PORTS_ALL=$(get_port_stats "" "" "pall")
+PORTS_24H=$(get_port_stats 86400 "" "p24") || { kt_log "Table rendering failed; previous dashboard export retained";exit 1; }
+PORTS_30D=$(get_port_stats 2592000 "" "p30") || { kt_log "Table rendering failed; previous dashboard export retained";exit 1; }
+PORTS_1Y=$(get_port_stats 31536000 "" "p1y") || { kt_log "Table rendering failed; previous dashboard export retained";exit 1; }
+PORTS_ALL=$(get_port_stats "" "" "pall") || { kt_log "Table rendering failed; previous dashboard export retained";exit 1; }
 
 # Bruteforce Tables (Strict Protocol Filtering)
 TCP_CSV=$(echo "$TCP_SERVICES" | tr -s ' ' ',' | sed 's/^,//;s/,$//')
@@ -690,13 +793,13 @@ UDP_CSV=$(echo "$UDP_SERVICES" | tr -s ' ' ',' | sed 's/^,//;s/,$//')
 
 CLAUSE_TCP=""
 if [ -n "$TCP_CSV" ]; then
-    # Match se la porta è nella lista TCP E se la storia contiene "/tcp" associato a quella porta
+    # Match ports in the TCP list whose history contains the corresponding "/tcp" entry.
     CLAUSE_TCP="(i.target_port IN ($TCP_CSV) AND i.port_history LIKE '%' || i.target_port || '/tcp%')"
 fi
 
 CLAUSE_UDP=""
 if [ -n "$UDP_CSV" ]; then
-    # Match se la porta è nella lista UDP E se la storia contiene "/udp" associato a quella porta
+    # Match ports in the UDP list whose history contains the corresponding "/udp" entry.
     CLAUSE_UDP="(i.target_port IN ($UDP_CSV) AND i.port_history LIKE '%' || i.target_port || '/udp%')"
 fi
 
@@ -713,38 +816,38 @@ fi
 
 TRAP_PORT_FILTER="AND d.list_type='trap' $FULL_CLAUSE"
 
-BRUTE_24H=$(get_port_stats 86400 "$TRAP_PORT_FILTER" "b24")
-BRUTE_30D=$(get_port_stats 2592000 "$TRAP_PORT_FILTER" "b30")
-BRUTE_1Y=$(get_port_stats 31536000 "$TRAP_PORT_FILTER" "b1y")
-BRUTE_ALL=$(get_port_stats "" "$TRAP_PORT_FILTER" "ball")
+BRUTE_24H=$(get_port_stats 86400 "$TRAP_PORT_FILTER" "b24") || { kt_log "Table rendering failed; previous dashboard export retained";exit 1; }
+BRUTE_30D=$(get_port_stats 2592000 "$TRAP_PORT_FILTER" "b30") || { kt_log "Table rendering failed; previous dashboard export retained";exit 1; }
+BRUTE_1Y=$(get_port_stats 31536000 "$TRAP_PORT_FILTER" "b1y") || { kt_log "Table rendering failed; previous dashboard export retained";exit 1; }
+BRUTE_ALL=$(get_port_stats "" "$TRAP_PORT_FILTER" "ball") || { kt_log "Table rendering failed; previous dashboard export retained";exit 1; }
 
 # IP Tables
-IPV6_24H=$(get_ip_table "d.ip LIKE '%:%' AND d.timestamp > $((NOW - 86400))" "1")
-IPV6_30D=$(get_ip_table "d.ip LIKE '%:%' AND d.timestamp > $((NOW - 2592000))" "1")
-IPV6_1Y=$(get_ip_table "d.ip LIKE '%:%' AND d.timestamp > $((NOW - 31536000))" "1")
-IPV6_ALL=$(get_ip_table "d.ip LIKE '%:%'" "1")
+IPV6_24H=$(get_ip_table "d.ip LIKE '%:%' AND d.timestamp > $((NOW - 86400))" "1" "ipv6_24h") || { kt_log "Table rendering failed; previous dashboard export retained";exit 1; }
+IPV6_30D=$(get_ip_table "d.ip LIKE '%:%' AND d.timestamp > $((NOW - 2592000))" "1" "ipv6_30d") || { kt_log "Table rendering failed; previous dashboard export retained";exit 1; }
+IPV6_1Y=$(get_ip_table "d.ip LIKE '%:%' AND d.timestamp > $((NOW - 31536000))" "1" "ipv6_1y") || { kt_log "Table rendering failed; previous dashboard export retained";exit 1; }
+IPV6_ALL=$(get_ip_table "d.ip LIKE '%:%'" "1" "ipv6_all") || { kt_log "Table rendering failed; previous dashboard export retained";exit 1; }
 
-TRAP_24H=$(get_ip_table "d.list_type='trap' AND d.timestamp > $((NOW - 86400))")
-OTHER_24H=$(get_ip_table "d.list_type='main' AND d.ip NOT LIKE '%/%' AND d.timestamp > $((NOW - 86400))")
-NETS_24H=$(get_ip_table "d.list_type='main' AND d.ip LIKE '%/%' AND d.timestamp > $((NOW - 86400))")
+TRAP_24H=$(get_ip_table "d.list_type='trap' AND d.timestamp > $((NOW - 86400))" "" "trap_24h") || { kt_log "Table rendering failed; previous dashboard export retained";exit 1; }
+OTHER_24H=$(get_ip_table "d.list_type='main' AND d.ip NOT LIKE '%/%' AND d.timestamp > $((NOW - 86400))" "" "other_24h") || { kt_log "Table rendering failed; previous dashboard export retained";exit 1; }
+NETS_24H=$(get_ip_table "d.list_type='main' AND d.ip LIKE '%/%' AND d.timestamp > $((NOW - 86400))" "" "nets_24h") || { kt_log "Table rendering failed; previous dashboard export retained";exit 1; }
 
-TRAP_30D=$(get_ip_table "d.list_type='trap' AND d.timestamp > $((NOW - 2592000))")
-OTHER_30D=$(get_ip_table "d.list_type='main' AND d.ip NOT LIKE '%/%' AND d.timestamp > $((NOW - 2592000))")
-NETS_30D=$(get_ip_table "d.list_type='main' AND d.ip LIKE '%/%' AND d.timestamp > $((NOW - 2592000))")
+TRAP_30D=$(get_ip_table "d.list_type='trap' AND d.timestamp > $((NOW - 2592000))" "" "trap_30d") || { kt_log "Table rendering failed; previous dashboard export retained";exit 1; }
+OTHER_30D=$(get_ip_table "d.list_type='main' AND d.ip NOT LIKE '%/%' AND d.timestamp > $((NOW - 2592000))" "" "other_30d") || { kt_log "Table rendering failed; previous dashboard export retained";exit 1; }
+NETS_30D=$(get_ip_table "d.list_type='main' AND d.ip LIKE '%/%' AND d.timestamp > $((NOW - 2592000))" "" "nets_30d") || { kt_log "Table rendering failed; previous dashboard export retained";exit 1; }
 
-TRAP_1Y=$(get_ip_table "d.list_type='trap' AND d.timestamp > $((NOW - 31536000))")
-OTHER_1Y=$(get_ip_table "d.list_type='main' AND d.ip NOT LIKE '%/%' AND d.timestamp > $((NOW - 31536000))")
-NETS_1Y=$(get_ip_table "d.list_type='main' AND d.ip LIKE '%/%' AND d.timestamp > $((NOW - 31536000))")
+TRAP_1Y=$(get_ip_table "d.list_type='trap' AND d.timestamp > $((NOW - 31536000))" "" "trap_1y") || { kt_log "Table rendering failed; previous dashboard export retained";exit 1; }
+OTHER_1Y=$(get_ip_table "d.list_type='main' AND d.ip NOT LIKE '%/%' AND d.timestamp > $((NOW - 31536000))" "" "other_1y") || { kt_log "Table rendering failed; previous dashboard export retained";exit 1; }
+NETS_1Y=$(get_ip_table "d.list_type='main' AND d.ip LIKE '%/%' AND d.timestamp > $((NOW - 31536000))" "" "nets_1y") || { kt_log "Table rendering failed; previous dashboard export retained";exit 1; }
 
-TRAP_ALL=$(get_ip_table "d.list_type='trap'")
-OTHER_ALL=$(get_ip_table "d.list_type='main' AND d.ip NOT LIKE '%/%'")
-NETS_ALL=$(get_ip_table "d.list_type='main' AND d.ip LIKE '%/%'")
+TRAP_ALL=$(get_ip_table "d.list_type='trap'" "" "trap_all") || { kt_log "Table rendering failed; previous dashboard export retained";exit 1; }
+OTHER_ALL=$(get_ip_table "d.list_type='main' AND d.ip NOT LIKE '%/%'" "" "other_all") || { kt_log "Table rendering failed; previous dashboard export retained";exit 1; }
+NETS_ALL=$(get_ip_table "d.list_type='main' AND d.ip LIKE '%/%'" "" "nets_all") || { kt_log "Table rendering failed; previous dashboard export retained";exit 1; }
 
 # --- Added GeoIP Tables ---
-GEO_24H=$(get_ip_table "d.list_type='geo' AND d.timestamp > $((NOW - 86400))")
-GEO_30D=$(get_ip_table "d.list_type='geo' AND d.timestamp > $((NOW - 2592000))")
-GEO_1Y=$(get_ip_table "d.list_type='geo' AND d.timestamp > $((NOW - 31536000))")
-GEO_ALL=$(get_ip_table "d.list_type='geo'")
+GEO_24H=$(get_ip_table "d.list_type='geo' AND d.timestamp > $((NOW - 86400))" "" "geo_24h") || { kt_log "Table rendering failed; previous dashboard export retained";exit 1; }
+GEO_30D=$(get_ip_table "d.list_type='geo' AND d.timestamp > $((NOW - 2592000))" "" "geo_30d") || { kt_log "Table rendering failed; previous dashboard export retained";exit 1; }
+GEO_1Y=$(get_ip_table "d.list_type='geo' AND d.timestamp > $((NOW - 31536000))" "" "geo_1y") || { kt_log "Table rendering failed; previous dashboard export retained";exit 1; }
+GEO_ALL=$(get_ip_table "d.list_type='geo'" "" "geo_all") || { kt_log "Table rendering failed; previous dashboard export retained";exit 1; }
 
 # Time Series Data
 ROWS_HOURLY=$(gen_html_rows "strftime('%H:00', timestamp, 'unixepoch', 'localtime')" "1" "WHERE timestamp >= strftime('%s', 'now', '-24 hours')")
@@ -766,11 +869,15 @@ DAYS=$((UP_SECONDS / 86400)); HOURS=$(( (UP_SECONDS % 86400) / 3600 ))
 UPTIME="${DAYS}d ${HOURS}h"
 S_MAIN=${SIZE_FirewallBlock:-0}; S_MAIN6=${SIZE_FirewallBlock6:-0}; S_VPN=${SIZE_VPNBlock:-0}; S_TRAP=${SIZE_AutoBan:-0}; S_TRAP6=${SIZE_AutoBan6:-0}; S_GEO=${SIZE_GeoBlock:-0}; S_GEO6=${SIZE_GeoBlock6:-0}
 
+S_MANUAL=${SIZE_Blacklist:-0}; S_MANUAL6=${SIZE_Blacklist6:-0}
+
 # Get file modification times for blocklists
 [ -f "$BACKUP_FILE_V4" ] && TIME_MAIN=$($DATE_CMD -r "$BACKUP_FILE_V4" "+%d-%m-%Y %H:%M:%S" 2>/dev/null) || TIME_MAIN="$DATE_UPDATE"
 [ -f "$BACKUP_FILE_V6" ] && TIME_V6=$($DATE_CMD -r "$BACKUP_FILE_V6" "+%d-%m-%Y %H:%M:%S" 2>/dev/null) || TIME_V6="$DATE_UPDATE"
 [ -f "$BACKUP_GEO_V4" ] && TIME_GEO=$($DATE_CMD -r "$BACKUP_GEO_V4" "+%d-%m-%Y %H:%M:%S" 2>/dev/null) || TIME_GEO="$DATE_UPDATE"
 [ -f "$BACKUP_MANUAL_V4" ] && TIME_MANUAL=$($DATE_CMD -r "$BACKUP_MANUAL_V4" "+%d-%m-%Y %H:%M:%S" 2>/dev/null) || TIME_MANUAL="$DATE_UPDATE"
+
+GEO_DATA=$(get_geo_data) || { kt_log "Geographic export failed; previous dashboard export retained";exit 1; }
 
 # Assemble JS File (Atomic Write to Temp File first)
 cat <<EOF > "$TEMP_DATA_FILE"
@@ -788,6 +895,7 @@ window.FW_DATA = {
       geo: "$S_GEO", diff_geo: "$DIFF_GEO", up_geo: "$TIME_GEO",
       geo6: "$S_GEO6", diff_geo6: "$DIFF_GEO6"
     },
+    geography: $GEO_DATA,
     averages: { hourly: "$AVG_H", daily: "$AVG_D", monthly: "$AVG_M", yearly: "$AVG_Y" },
     tables: { 
         hourly: \`$ROWS_HOURLY\`, daily: \`$ROWS_DAILY\`, monthly: \`$ROWS_MONTHLY\`, yearly: \`$ROWS_YEARLY\`, top_days: \`$ROWS_TOP_DAYS\`,
@@ -800,89 +908,43 @@ window.FW_DATA = {
 EOF
 
 # Move temp file to final location (Atomic update)
+mkdir -p "$PUBLISHED_LIST_DIR"
+for list in "$LIST_DIR"/*.txt; do [ ! -f "$list" ] || { chmod 644 "$list" && mv "$list" "$PUBLISHED_LIST_DIR/"; }; done
+rmdir "$LIST_DIR" 2>/dev/null || :
 mv "$TEMP_DATA_FILE" "$DATA_FILE"
 chmod 644 "$DATA_FILE"
 
 # ==============================================================================
 # 10. SMART MAINTENANCE & PERSISTENCE (LOSSLESS COMPRESSION)
 # ==============================================================================
-echo " -> Smart Database Lossless Compression..."
-
-YESTERDAY=$((NOW - 86400))
-THIRTY_DAYS=$((NOW - 2592000))
-FORTY_FIVE_DAYS=$((NOW - 3888000))
-ONE_YEAR=$((NOW - 31536000))
-
-sqlite3 "$DB_FILE" "
-BEGIN TRANSACTION;
-
--- 1. ROLLUP GLOBAL DROPS (Preserve aggregate history indefinitely)
-CREATE TEMP TABLE IF NOT EXISTS drops_rollup AS 
-    SELECT ((timestamp / 86400) * 86400) + 43200 AS day_ts, list_name, SUM(count) AS total_count 
-    FROM drops 
-    WHERE timestamp < $YESTERDAY 
-    GROUP BY (timestamp / 86400), list_name;
-DELETE FROM drops WHERE timestamp < $YESTERDAY;
-INSERT INTO drops (timestamp, list_name, count) 
-    SELECT day_ts, list_name, total_count FROM drops_rollup;
-DROP TABLE drops_rollup;
-
--- 2. ROLLUP IP DROPS (Aggregate historical IP data to prevent loss)
-CREATE TEMP TABLE IF NOT EXISTS ip_drops_rollup AS 
-    SELECT ((timestamp / 86400) * 86400) + 43200 AS day_ts, ip, SUM(count) AS total_count, list_type 
-    FROM ip_drops 
-    WHERE timestamp < $YESTERDAY 
-    GROUP BY (timestamp / 86400), ip, list_type;
-DELETE FROM ip_drops WHERE timestamp < $YESTERDAY;
-INSERT INTO ip_drops (timestamp, ip, count, list_type) 
-    SELECT day_ts, ip, total_count, list_type FROM ip_drops_rollup;
-DROP TABLE ip_drops_rollup;
-
--- 3. VIP LIST CREATION (Save top IPs in RAM)
-CREATE TEMP TABLE keep_ips (ip TEXT UNIQUE);
-INSERT OR IGNORE INTO keep_ips (ip) 
-SELECT ip FROM (SELECT ip FROM ip_drops GROUP BY ip ORDER BY SUM(count) DESC LIMIT 15);
-INSERT OR IGNORE INTO keep_ips (ip) 
-SELECT ip FROM (SELECT ip FROM ip_drops WHERE timestamp >= $ONE_YEAR GROUP BY ip ORDER BY SUM(count) DESC LIMIT 15);
-INSERT OR IGNORE INTO keep_ips (ip) 
-SELECT ip FROM (SELECT ip FROM ip_drops WHERE timestamp >= $THIRTY_DAYS GROUP BY ip ORDER BY SUM(count) DESC LIMIT 15);
-
--- 4. SELECTIVE DELETION AND CLEANUP (Replaces old sections 3 and 4)
--- Remove ghost IPs older than 30 days and useless IP details older than 45 days (excluding VIPs)
-DELETE FROM ip_drops WHERE timestamp < $THIRTY_DAYS AND count <= 5;
-DELETE FROM ip_drops WHERE timestamp < $FORTY_FIVE_DAYS AND ip NOT IN (SELECT ip FROM keep_ips);
-
--- NEW: Pruning ip_info (Metadati)
--- This is crucial: if an IP is no longer in ip_drops, its metadata is useless.
--- We delete rows from ip_info for IPs that are no longer referenced in ip_drops.
-DELETE FROM ip_info 
-WHERE ip NOT IN (
-    SELECT DISTINCT CASE WHEN INSTR(ip, '/') > 0 THEN SUBSTR(ip, 1, INSTR(ip, '/') - 1) ELSE ip END 
-    FROM ip_drops
-);
-
-DROP TABLE keep_ips;
-COMMIT;
-
--- 5. RECLAIM DISK SPACE
-VACUUM;
-"
-
+echo " -> Historical records preserved (no pruning or timestamp rollup)."
+if [ "${1:-}" = --maintenance ]; then
+    [ "$(sqlite3 "$DB_FILE" 'PRAGMA quick_check;')" = ok ] || exit 1
+    sqlite3 "$DB_FILE" 'PRAGMA wal_checkpoint(TRUNCATE); VACUUM;' || exit 1
+fi
 DB_SIZE_H=$(du -h "$DB_FILE" 2>/dev/null | awk '{print $1}')
-echo " -> DB Optimized & Compressed. New Size: $DB_SIZE_H"
+echo " -> Current DB size: $DB_SIZE_H"
 
+if [ "${KT_FW_PREVIEW:-false}" != true ]; then
 # SAVE IPSETS TO DISK (Auto-Save)
 echo " -> Saving AutoBan states..."
-ipset save AutoBan > "$AUTOBAN_SAVE_FILE" 2>/dev/null
+if [ -f /opt/lib/keentool/firewall_state.sh ];then
+ . /opt/lib/keentool/firewall_state.sh
+ fw_checkpoint_state || kt_log 'Dynamic state checkpoint failed; previous snapshot retained'
+fi
+ipset save AutoBan > "$KT_WORKDIR/autoban.save" 2>/dev/null
 if [ "$ENABLE_IPV6" = "true" ]; then
-    ipset save AutoBan6 >> "$AUTOBAN_SAVE_FILE" 2>/dev/null
+    ipset save AutoBan6 >> "$KT_WORKDIR/autoban.save" 2>/dev/null
 fi
 
+if [ -s "$KT_WORKDIR/autoban.save" ]; then cp "$KT_WORKDIR/autoban.save" "${AUTOBAN_SAVE_FILE}.tmp" && mv "${AUTOBAN_SAVE_FILE}.tmp" "$AUTOBAN_SAVE_FILE"; fi
+kt_log "Statistics generated in $((SECONDS-START_SECONDS)) seconds"
 T4_TOT=${SIZE_AutoBan:-0}; T4_DIF=${DIFF_TRAP:-=0}
 T6_TOT=${SIZE_AutoBan6:-0}; T6_DIF=${DIFF_TRAP6:-=0}
-TOTAL_NEW_DROPS=$((NEW_DROPS_V4 + NEW_DROPS_V6 + NEW_DROPS_VPN + NEW_DROPS_TRAP))
+TOTAL_NEW_DROPS=$((NEW_DROPS_V4 + NEW_DROPS_V6 + NEW_DROPS_VPN + NEW_DROPS_TRAP + NEW_DROPS_TRAP6 + NEW_DROPS_GEO + NEW_DROPS_GEO6 + NEW_DROPS_MANUAL + NEW_DROPS_MANUAL6))
 
 # ==============================================================================
+fi
 # ADAPTIVE REPORTING MODULE (Daily/Weekly Auto-Detection)
 # ==============================================================================
 send_report() {
@@ -1009,3 +1071,4 @@ fi
 # Log summary to Syslog including GeoBlock size
 logger -t "$LOG_TAG" "SUMMARY | Drops: +$TOTAL_NEW_DROPS | Trap4: $T4_TOT ($T4_DIF) | Trap6: $T6_TOT ($T6_DIF) | Geo: $SIZE_GeoBlock | Ports: $COUNT_UPDATED | DB: $DB_SIZE_H"
 echo "Done."
+

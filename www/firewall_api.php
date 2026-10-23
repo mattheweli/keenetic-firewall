@@ -1,172 +1,99 @@
 <?php
 // ==============================================================================
-// KEENETIC FIREWALL API BACKEND v1.0.0
+// FIREWALL API v2.0.0
+// Release date: 2026-10-22 | Status: stable
+// Previous upstream version: unversioned
+// Changelog v2.0.0:
+//   - Require admin for Settings reads and POST/CSRF for typed Settings writes.
+// Changelog v2.0.0:
+//   - Expose fixed-list read-only log size metadata independently of log downloads.
+// Changelog v2.0.0:
+//   - Forward bounded log pagination cursors to the existing read-only broker operation.
+// Changelog v2.0.0:
+//   - Public read-only system-log previews through the existing bounded broker.
+// Changelog v2.0.0:
+//   - Delegate fixed operations to the private Unix-socket broker; retain HTTPS/session/CSRF, add guarded policy confirmation, audit and typed temporary bans.
+// Changelog v2.0.0:
+//   - STATUS: read-only verification of all expected rules and both families.
+// Changelog v2.0.0:
+//   - READ: live PCAP log is public/read-only; admin/CSRF retained for mutations.
+//   - LOG: router-local date/time and persistent PCAP with latest rotation fallback.
+// Changelog v2.0.0:
+//   - UX: password-only admin login; no username field or username dependency.
+// Changelog v2.0.0:
+//   - NEW: HTTPS-only admin login/logout, server-side session and automatic CSRF validation.
+//   - NEW: admin password hash outside web root; throttling and session expiry/revocation.
+//   - ACCESS: lookup/status public, mutations and live log protected; token retained for automation.
+// Changelog v2.0.0:
+//   - SECURITY: authenticated reads/writes using X-KT-Token and constant-time comparison.
+//   - SECURITY: writes require POST JSON; same-origin check when Origin is supplied.
+//   - VALIDATION: inet_pton validation; reject subnet input for host actions.
+//   - FIX: check command outcomes; use installed netfilter hook path.
+//   - NEW: lookup reports matching block sets; ban/unban persists manual sets.
+//   - HTTP: JSON errors/status codes, no-store and nosniff headers.
+//   - LIMIT: PHP runtime, token access and command privileges require router validation.
 // ==============================================================================
-// AUTHOR: mattheweli
-// DESCRIPTION: 
-//   This script acts as the backend API for the Keenetic Firewall Dashboard.
-//   It processes JSON requests to safely interact with IP sets and iptables 
-//   on the router.
-//
-//   FEATURES:
-//     - IPv4/IPv6 format validation.
-//     - Real-time IP lookup across multiple blocklists (AutoBan, GeoBlock, etc.).
-//     - Manual IP ban functionality with instant disk persistence.
-//     - Quick IP unban (from both AutoBan and manual Blacklists).
-//     - Global Master Switch control to enable/disable the firewall on the fly.
-// ==============================================================================
+// Historical upstream header / changelog follows.
 
-// /opt/var/www/firewall/firewall_api.php
-header('Content-Type: application/json');
-
-$action = isset($_GET['action']) ? $_GET['action'] : '';
-$raw_ip = isset($_GET['ip']) ? trim($_GET['ip']) : '';
-
-/**
- * Manual IP validation (without depending on filter_var)
- * Supports IPv4 and basic IPv6 format
- */
-function isIPValid($ip) {
-    // Basic IPv4 format validation
-    if (!preg_match('/^(\d{1,3}\.){3}\d{1,3}$/', $ip)) {
-        // If not v4, check basic v6
-        return (strpos($ip, ':') !== false);
+// HTTPS session/CSRF authorization stays in the unprivileged web process.
+// Privileged work is delegated to a bounded local Unix-socket protocol.
+putenv('PATH=/opt/bin:/opt/sbin:/usr/bin:/usr/sbin:/bin:/sbin');
+header('Content-Type: application/json; charset=utf-8');
+header('Cache-Control: no-store');
+header('X-Content-Type-Options: nosniff');
+header('Referrer-Policy: same-origin');
+function reply($data,$code=200){http_response_code($code);echo json_encode($data,JSON_INVALID_UTF8_SUBSTITUTE);exit;}
+function kt_broker($input,$quiet=false){
+    $input['actor']=$_SERVER['REMOTE_ADDR']??'local';
+    $socket=@stream_socket_client('unix:///opt/var/run/keentool-security/broker.sock',$errno,$error,2);
+    if(!$socket){if($quiet)return null;reply(['status'=>'error','message'=>'Security service unavailable'],503);}
+    stream_set_timeout($socket,55);$line=json_encode($input,JSON_INVALID_UTF8_SUBSTITUTE)."\n";
+    if(strlen($line)>8192||fwrite($socket,$line)!==strlen($line)){fclose($socket);if($quiet)return null;reply(['status'=>'error','message'=>'Security request failed'],503);}
+    $line=fgets($socket,2097153);fclose($socket);$data=json_decode($line?:'',true);
+    if(!is_array($data)){if($quiet)return null;reply(['status'=>'error','message'=>'Invalid security response'],503);}return $data;
+}
+function kt_auth_event($event){kt_broker(['action'=>'audit_auth','event'=>$event],true);}
+function fail($message,$code=400){
+    global $action;
+    if(($action??'')==='login')kt_auth_event($code===429?'login throttled':'login failed');
+    elseif($code===401)kt_auth_event('authorization rejected');
+    elseif(stripos($message,'CSRF')!==false)kt_auth_event('CSRF rejected');
+    reply(['status'=>'error','message'=>$message],$code);
+}
+$tokenFile='/opt/etc/keentool/firewall-api.token';$expected=is_readable($tokenFile)?trim(file_get_contents($tokenFile)):'';
+$provided=$_SERVER['HTTP_X_KT_TOKEN']??'';if(!is_string($provided))fail('Invalid token',401);
+$tokenAuth=strlen($expected)>=32&&$provided!==''&&hash_equals($expected,$provided);
+require '/opt/lib/keentool-admin/admin_auth.php';
+if(!kt_secure_request())fail('HTTPS required',403);
+if(isset($_SERVER['HTTP_ORIGIN'])){
+    $origin=parse_url($_SERVER['HTTP_ORIGIN']);$scheme=(!empty($_SERVER['HTTPS'])&&$_SERVER['HTTPS']!=='off')?'https':'http';
+    $authority=($origin['host']??'').(isset($origin['port'])?':'.$origin['port']:'');
+    if(($origin['scheme']??'')!==$scheme||strcasecmp($authority,$_SERVER['HTTP_HOST']??'')!==0)fail('Origin rejected',403);
+}
+$method=$_SERVER['REQUEST_METHOD']??'GET';$input=$_GET;
+if($method==='POST'){
+    if(stripos($_SERVER['CONTENT_TYPE']??'','application/json')!==0)fail('JSON required',415);
+    $body=file_get_contents('php://input',false,null,0,8193);if($body===false||strlen($body)>8192)fail('Request too large',413);
+    $input=json_decode($body,true);if(!is_array($input))fail('Invalid JSON');
+}
+$action=$input['action']??'';
+if(!is_string($action)||!is_string($input['ip']??''))fail('Invalid input');
+$writes=['ban','unban','enable','disable','confirm_policy','rollback_policy','settings_save'];
+if(in_array($action,$writes,true)&&$method!=='POST')fail('POST required',405);
+$admin=in_array($action,$writes,true)||in_array($action,['audit','settings_get'],true);
+if(in_array($action,['auth_status','login','logout'],true)||(!$tokenAuth&&$admin)){
+    kt_boot_session();
+    if($action==='auth_status')reply(['status'=>'success','authenticated'=>kt_admin_active(),'configured'=>kt_credentials()!==null,'csrf'=>$_SESSION['csrf']]);
+    if($action==='login'||$action==='logout'){
+        if($method!=='POST')fail('POST required',405);kt_require_csrf();
+        if($action==='login'){kt_admin_login($input);kt_auth_event('login success');reply(['status'=>'success','authenticated'=>true,'csrf'=>$_SESSION['csrf']]);}
+        kt_admin_logout();kt_auth_event('logout');reply(['status'=>'success','authenticated'=>false]);
     }
-    
-    // NEW: Lifesaver filter to prevent banning crucial internal/local IPs
-    // Blocks 127.x.x.x, Multicast (224.x-255.x), and Broadcast (255.255.255.255)
-    if (preg_match('/^(127\.|224\.|225\.|239\.|255\.255\.255\.255)/', $ip)) {
-        return false;
-    }
-    
-    return true;
+    if(!kt_admin_active())fail('Admin login required',401);
+    if(in_array($action,$writes,true))kt_require_csrf();
+    $_SESSION['seen']=time();session_write_close();
 }
-
-// Validate IP format if provided
-if (!empty($raw_ip) && !isIPValid($raw_ip)) {
-    echo json_encode(["status" => "error", "message" => "Invalid IP format: $raw_ip"]);
-    exit;
-}
-
-// Safely escape IP for shell execution
-$safe_ip = escapeshellarg($raw_ip);
-
-switch ($action) {
-    case 'lookup':
-        if (empty($raw_ip)) {
-            echo json_encode(["status" => "error", "message" => "IP required"]);
-        } else {
-            // Define ipsets to check (Added new manual Blacklists)
-            $sets = ['AutoBan', 'Blacklist', 'GeoBlock', 'FirewallBlock', 'AutoBan6', 'Blacklist6', 'FirewallBlock6']; 
-            $found_in = [];
-
-            foreach ($sets as $set) {
-                // Verify if the ipset exists to prevent errors
-                $exists = shell_exec("ipset list " . escapeshellarg($set) . " 2>/dev/null");
-                if ($exists) {
-                    // Test if IP is in the set
-                    $check = shell_exec("ipset test " . escapeshellarg($set) . " $safe_ip 2>&1");
-                    if (strpos($check, 'is in set') !== false) {
-                        $found_in[] = $set;
-                    }
-                }
-            }
-
-            echo json_encode([
-                "status" => "success", 
-                "ip" => $raw_ip, 
-                "blocked" => count($found_in) > 0,
-                "lists" => $found_in
-            ]);
-        }
-        break;
-
-    case 'ban':
-        if (empty($raw_ip)) {
-            echo json_encode(["status" => "error", "message" => "IP required"]);
-        } else {
-            // Determine if IPv4 or IPv6 and select the appropriate manual list
-            $target_list = (strpos($raw_ip, ':') !== false) ? 'Blacklist6' : 'Blacklist';
-            
-            // Execute the ban directly via shell
-            shell_exec("ipset add " . escapeshellarg($target_list) . " $safe_ip 2>/dev/null");
-            
-            // NEW: Save the list to disk instantly for persistence
-            shell_exec("ipset save " . escapeshellarg($target_list) . " > /opt/etc/" . escapeshellarg($target_list) . ".backup");
-            
-            echo json_encode(["status" => "success", "action" => $action, "ip" => $raw_ip, "list" => $target_list]);
-        }
-        break;
-
-    case 'unban':
-        if (empty($raw_ip)) {
-            echo json_encode(["status" => "error", "message" => "IP required"]);
-        } else {
-            // Unban from both AutoBan and manual Blacklist to ensure it's fully freed
-            $target_lists = (strpos($raw_ip, ':') !== false) ? ['AutoBan6', 'Blacklist6'] : ['AutoBan', 'Blacklist'];
-            
-            foreach ($target_lists as $list) {
-                shell_exec("ipset del " . escapeshellarg($list) . " $safe_ip 2>/dev/null");
-                
-                // NEW: Save the list to disk instantly to prevent the IP from returning on reboot
-                shell_exec("ipset save " . escapeshellarg($list) . " > /opt/etc/" . escapeshellarg($list) . ".backup");
-            }
-            
-            echo json_encode(["status" => "success", "action" => $action, "ip" => $raw_ip]);
-        }
-        break;
-
-    case 'status':
-        // Read config and check if the Master Kill Switch is enabled
-        $conf = @file_get_contents('/opt/etc/firewall.conf');
-        $enabled = true; // Assume enabled by default
-        if ($conf !== false && preg_match('/^ENABLE_FIREWALL="false"/m', $conf)) {
-            $enabled = false;
-        }
-        echo json_encode(["status" => "success", "enabled" => $enabled]);
-        break;
-
-    case 'enable':
-        // 1. In-place edit of the config file
-        shell_exec("sed -i 's/^ENABLE_FIREWALL=\"false\"/ENABLE_FIREWALL=\"true\"/' /opt/etc/firewall.conf");
-        // 2. Call the native hook bypassing the table check, run in background to prevent UI lag
-        shell_exec("table=filter /opt/bin/100-firewall.sh >/dev/null 2>&1 &");
-        
-        echo json_encode(["status" => "success", "action" => "enable"]);
-        break;
-
-    case 'disable':
-        // 1. In-place edit of the config file
-        shell_exec("sed -i 's/^ENABLE_FIREWALL=\"true\"/ENABLE_FIREWALL=\"false\"/' /opt/etc/firewall.conf");
-        // 2. Call the native hook to flush chains cleanly
-        shell_exec("table=filter /opt/bin/100-firewall.sh >/dev/null 2>&1 &");
-        
-        echo json_encode(["status" => "success", "action" => "disable"]);
-        break;
-		
-	case 'livelog':
-        $pcap_file = '/tmp/fw_syn_ring.pcap';
-        // Get line count from request, default to 1000 if not provided
-        $lines = isset($_GET['lines']) ? intval($_GET['lines']) : 1000;
-        
-        if (!file_exists($pcap_file) || filesize($pcap_file) === 0) {
-            echo json_encode(["status" => "error", "message" => "No packets captured (PCAP empty or missing)."]);
-            exit;
-        }
-
-        // Use tcpdump to read binary pcap, -nn for no DNS resolution
-        // Use tail to limit output lines based on user preference
-        $cmd = "tcpdump -nn -r " . escapeshellarg($pcap_file) . " 2>/dev/null | tail -n " . intval($lines);
-        $log_data = shell_exec($cmd);
-
-        if (empty($log_data)) {
-            echo json_encode(["status" => "success", "log" => "Waiting for packets..."]);
-        } else {
-            echo json_encode(["status" => "success", "log" => $log_data]);
-        }
-        break;
-
-    default:
-        echo json_encode(["status" => "error", "message" => "Invalid action"]);
-        break;
-}
+if(!in_array($action,array_merge($writes,['status','lookup','livelog','systemlog','log_sizes','snapshot','audit','settings_get']),true))fail('Unknown action');
+$request=['action'=>$action];
+foreach(['ip','duration','note','pending_id','lines','log_id','cursor','group','revision','values'] as $key)if(isset($input[$key]))$request[$key]=$input[$key];
+$result=kt_broker($request);reply($result,($result['status']??'error')==='success'?200:((int)($result['http_status']??400)===429?429:400));

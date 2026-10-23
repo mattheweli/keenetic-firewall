@@ -1,0 +1,49 @@
+name: Prepare stable draft release
+on:
+  push:
+    branches: ['release/stable-*']
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: stable-draft-${{ github.repository }}
+  cancel-in-progress: false
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Check coordinated suite
+        if: github.event.repository.name == 'KeenTool'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y php8.3-cli php8.3-cgi php8.3-sqlite3 sqlite3
+          python3 suite/tools/check-release.py
+      - name: Build source and complete-suite assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(python3 -c 'import json;print(json.load(open("RELEASE.json"))["version"])')
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          name=${GITHUB_REPOSITORY#*/}
+          mkdir -p "$RUNNER_TEMP/release-assets"
+          git archive --prefix="$name-$version/" HEAD | gzip -n > "$RUNNER_TEMP/release-assets/$name-$version-sources.tar.gz"
+          (cd "$RUNNER_TEMP/release-assets" && sha256sum "$name-$version-sources.tar.gz" > "$name-$version-sources.tar.gz.sha256")
+          if [ "$name" = KeenTool ];then python3 suite/tools/package-suite.py "$RUNNER_TEMP/release-assets";fi
+          printf 'RELEASE_TAG=v%s\n' "$version" >> "$GITHUB_ENV"
+          printf 'RELEASE_TITLE=%s %s\n' "$name" "$version" >> "$GITHUB_ENV"
+      - name: Create or refresh draft only
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if gh release view "$RELEASE_TAG" --json isDraft > "$RUNNER_TEMP/release-state.json" 2>/dev/null;then
+            python3 -c 'import json,sys;assert json.load(open(sys.argv[1]))["isDraft"] is True,"Refusing to replace a published release"' "$RUNNER_TEMP/release-state.json"
+          else
+            gh release create "$RELEASE_TAG" --draft --target "$GITHUB_SHA" --title "$RELEASE_TITLE" --notes-file RELEASE_NOTES.md
+          fi
+          gh release upload "$RELEASE_TAG" "$RUNNER_TEMP"/release-assets/* --clobber

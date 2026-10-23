@@ -1,4 +1,6 @@
-#!/bin/sh
+#!/opt/bin/bash
+# KEENETIC FIREWALL MONITOR v4.0.0
+# Release: 2026-10-22 | Stable. See CHANGELOG.md for release details.
 
 # ==============================================================================
 # KEENETIC FIREWALL MONITOR v3.3.0 (GEOIP EDITION)
@@ -35,9 +37,11 @@ REFRESH_RATE=2       # Base display update (seconds)
 SCAN_FAST=2          # 2 * 2s = 4s (When list is < 5 IPs)
 SCAN_SLOW=15         # 15 * 2s = 30s (When list is full)
 
+. "${KT_COMMON:-/opt/lib/keentool/common.sh}" || exit 1
+kt_init firewall-monitor || exit $?
 # Temp files for differential analysis
-SNAP_START="/tmp/fw_mon_start.tmp"
-SNAP_CURR="/tmp/fw_mon_curr.tmp"
+SNAP_START="$KT_WORKDIR/start"
+SNAP_CURR="$KT_WORKDIR/current"
 
 # --- COLORS ---
 ESC=$(printf '\033')
@@ -51,9 +55,11 @@ cleanup() {
     rm -f "$SNAP_START" "$SNAP_CURR"
     echo -e "${RESET}"
     echo "Monitor stopped."
-    exit 0
+    kt_cleanup
 }
-trap cleanup INT TERM
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 # --- HELPER FUNCTIONS ---
 format_num() { echo "$1" | awk '{ printf "%'\''d", $1 }'; }
@@ -190,7 +196,7 @@ while true; do
     # 3. DRAW UI
     clear
     echo -e "${BOLD}${BLUE}╔════════════════════════════════════════════════╗${RESET}"
-    echo -e "${BOLD}${BLUE}║    KEENETIC FIREWALL SESSION MONITOR v3.3.0    ║${RESET}"
+    echo -e "${BOLD}${BLUE}║    KEENETIC FIREWALL SESSION MONITOR v4.0.0    ║${RESET}"
     echo -e "${BOLD}${BLUE}╚════════════════════════════════════════════════╝${RESET}"
     echo ""
     
@@ -217,3 +223,4 @@ while true; do
 
     sleep $REFRESH_RATE
 done
+
