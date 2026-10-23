@@ -1,14 +1,18 @@
-# keenetic-firewall 4.0.0
+# keenetic-firewall 4.0.1
 
-Stable component sources for the KeenTool suite. Release date: 2026-10-22.
+Stable component sources for the KeenTool suite. Release date: 2026-10-23.
 
 ## Installation and updates
 
-Install the complete KeenTool 2.0.0 release from https://github.com/mattheweli/KeenTool/releases. The shared runtime, assets, authentication and security broker are required. Do not copy this component alone over an older installation.
+Install the complete KeenTool 2.0.1 release from https://github.com/mattheweli/KeenTool/releases. The shared runtime, assets, authentication and security broker are required. Do not copy this component alone over an older installation.
 
 For an extracted complete package, use /opt/bin/bash ./install.sh --plan and follow docs/INSTALL.md. Existing public-source and local-alpha installations use --mode upgrade. New installations require --interface and reviewed web/logging ownership options. Existing databases, configuration, credentials and upgrade schedules are preserved.
 
-## Changes
+## Current patch
+
+Progressive firewall IP history aggregation is configurable from KeenTool and web Settings, with verified baseline backup and exact IP/list totals. See RELEASE_NOTES.md for precision and baseline-restore limitations. Update through `keentool --update`.
+
+## Earlier stable changes
 
 - Firewall repository 4.0.0 coordinates monitor/statistics 4.0.0, hook/manager/updater/VPN/abuse tools 3.0.0 and dashboard/API/loader 2.0.0. New security helpers are 1.0.0.
 - Hook: dual-family staged/preflight apply, owned-chain replacement and recovery, exact jump teardown, bounded NFLOG independent of DROP, explicit bypasses, coherent enable/IPv6 switches and timeout-capable managed manual bans. Avoid global tcpdump termination.

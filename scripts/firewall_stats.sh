@@ -1,6 +1,6 @@
 #!/opt/bin/bash
-# KEENETIC FIREWALL STATS v4.0.0
-# Release: 2026-10-22 | Stable. See CHANGELOG.md for release details.
+# KEENETIC FIREWALL STATS v4.0.1
+# Release: 2026-10-23 | Stable. See CHANGELOG.md for release details.
 
 # ==============================================================================
 # KEENETIC FIREWALL STATS v3.7.2 (INTERACTIVE DASHBOARD)
@@ -33,7 +33,7 @@
 # ==============================================================================
 
 export PATH=${KT_PATH:-/opt/bin:/opt/sbin:/usr/bin:/usr/sbin:/bin:/sbin}
-# Firewall Stats 4.0.0
+# Firewall Stats 4.0.1
 . "${KT_COMMON:-/opt/lib/keentool/common.sh}" || exit 1
 kt_init firewall-db || exit $?
 sqlite3() { kt_sqlite "$@"; }
@@ -166,7 +166,7 @@ NOW=${KT_NOW:-$($DATE_CMD +%s)}
 NEW_DROPS_V4=0; NEW_DROPS_V6=0; NEW_DROPS_VPN=0; NEW_DROPS_TRAP=0; NEW_DROPS_TRAP6=0; NEW_DROPS_GEO=0; NEW_DROPS_GEO6=0; NEW_DROPS_MANUAL=0; NEW_DROPS_MANUAL6=0
 NEW_IP_RECORDS=0
 
-echo "=== Firewall Stats Updater v4.0.0 ==="
+echo "=== Firewall Stats Updater v4.0.1 ==="
 
 # ==============================================================================
 # 3. DATABASE INITIALIZATION & TUNING
@@ -603,6 +603,33 @@ fi
 fi
 # 9. GENERATE JSON DATA FOR DASHBOARD (ATOMIC WRITE)
 # ==============================================================================
+# Aggregate at most once per day before exporting any IP-based tables. Preview never mutates history.
+if [ -z "${TZ:-}" ];then
+    for timezone_file in /etc/TZ /opt/etc/TZ;do
+        if [ -s "$timezone_file" ];then export TZ="$(cat "$timezone_file")";break;fi
+    done
+fi
+HISTORY_JSON='{}'
+HISTORY_ENGINE=${KT_HISTORY_ENGINE:-/opt/lib/keentool/history_engine.php}
+if [ -f "$HISTORY_ENGINE" ];then
+    HISTORY_PHP=${KT_HISTORY_PHP:-}
+    if [ -z "$HISTORY_PHP" ];then
+        for candidate in /opt/bin/php-cli /opt/bin/php8 /opt/bin/php;do
+            if [ -x "$candidate" ] && "$candidate" -r 'exit(PHP_SAPI==="cli"?0:1);' >/dev/null 2>&1;then HISTORY_PHP=$candidate;break;fi
+        done
+    fi
+    if [ -n "$HISTORY_PHP" ];then
+        HISTORY_ACTION=(status)
+        [ "${KT_FW_PREVIEW:-false}" = true ] || HISTORY_ACTION=(run --due)
+        if "$HISTORY_PHP" "$HISTORY_ENGINE" "${HISTORY_ACTION[@]}" > "$KT_WORKDIR/history.json";then
+            HISTORY_JSON=$("$HISTORY_PHP" -r '$v=json_decode(file_get_contents($argv[1]),true,512,JSON_THROW_ON_ERROR);unset($v["backup"]);echo json_encode($v,JSON_HEX_TAG|JSON_HEX_AMP|JSON_HEX_APOS|JSON_HEX_QUOT|JSON_THROW_ON_ERROR);' "$KT_WORKDIR/history.json")
+        else
+            kt_log 'History aggregation deferred; current statistics remain available. Review the preceding history error.'
+            if "$HISTORY_PHP" "$HISTORY_ENGINE" status > "$KT_WORKDIR/history.json";then HISTORY_JSON=$("$HISTORY_PHP" -r '$v=json_decode(file_get_contents($argv[1]),true,512,JSON_THROW_ON_ERROR);unset($v["backup"]);echo json_encode($v,JSON_HEX_TAG|JSON_HEX_AMP|JSON_HEX_APOS|JSON_HEX_QUOT|JSON_THROW_ON_ERROR);' "$KT_WORKDIR/history.json");fi
+        fi
+    fi
+fi
+
 echo " -> Generating JS Data..."
 TOTAL_DROPS_ALL_TIME=$(sqlite3 "$DB_FILE" "SELECT sum(count) FROM drops;")
 [ -z "$TOTAL_DROPS_ALL_TIME" ] && TOTAL_DROPS_ALL_TIME="0"
@@ -811,7 +838,7 @@ elif [ -n "$CLAUSE_TCP" ]; then
 elif [ -n "$CLAUSE_UDP" ]; then
     FULL_CLAUSE="AND $CLAUSE_UDP"
 else
-    FULL_CLAUSE="AND 0" # Nessun servizio definito, nessuna tabella brute force
+    FULL_CLAUSE="AND 0" # No configured service, so no brute-force table
 fi
 
 TRAP_PORT_FILTER="AND d.list_type='trap' $FULL_CLAUSE"
@@ -883,6 +910,7 @@ GEO_DATA=$(get_geo_data) || { kt_log "Geographic export failed; previous dashboa
 cat <<EOF > "$TEMP_DATA_FILE"
 window.FW_DATA = {
     updated: "$DATE_UPDATE", uptime: "$UPTIME", lifetime: "$TOTAL_DROPS_ALL_TIME",
+    history: $HISTORY_JSON,
     ipv6_status: "$ENABLE_IPV6",
     lists: { 
       main: "$S_MAIN", diff_v4: "$DIFF_V4", up_main: "$TIME_MAIN",
@@ -917,7 +945,7 @@ chmod 644 "$DATA_FILE"
 # ==============================================================================
 # 10. SMART MAINTENANCE & PERSISTENCE (LOSSLESS COMPRESSION)
 # ==============================================================================
-echo " -> Historical records preserved (no pruning or timestamp rollup)."
+echo " -> IP/list hit totals, global counters, port history and reporting state preserved; history policy is shown on the dashboard."
 if [ "${1:-}" = --maintenance ]; then
     [ "$(sqlite3 "$DB_FILE" 'PRAGMA quick_check;')" = ok ] || exit 1
     sqlite3 "$DB_FILE" 'PRAGMA wal_checkpoint(TRUNCATE); VACUUM;' || exit 1
