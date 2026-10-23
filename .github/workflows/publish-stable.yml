@@ -1,0 +1,20 @@
+name: Publish approved stable release
+on:
+  push:
+    branches: ['operations/publish-stable-20261023']
+permissions:
+  contents: write
+  actions: read
+  pull-requests: write
+concurrency:
+  group: publish-approved-stable-${{ github.repository }}
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify and publish the existing approved draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 .github/scripts/publish_checked_release.py
