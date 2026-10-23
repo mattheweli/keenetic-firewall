@@ -21,7 +21,14 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y php8.3-cli php8.3-cgi php8.3-sqlite3 sqlite3
-          python3 suite/tools/check-release.py
+          sudo env PATH="$PATH" KT_VALIDATION_RESULTS="$RUNNER_TEMP/keentool-validation.json" python3 suite/tools/check-release.py
+      - name: Preserve isolated validation results
+        if: always() && github.event.repository.name == 'KeenTool'
+        uses: actions/upload-artifact@v4
+        with:
+          name: validation-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/keentool-validation.json
+          if-no-files-found: warn
       - name: Build source and complete-suite assets
         shell: bash
         run: |
@@ -43,6 +50,7 @@ jobs:
           set -euo pipefail
           if gh release view "$RELEASE_TAG" --json isDraft > "$RUNNER_TEMP/release-state.json" 2>/dev/null;then
             python3 -c 'import json,sys;assert json.load(open(sys.argv[1]))["isDraft"] is True,"Refusing to replace a published release"' "$RUNNER_TEMP/release-state.json"
+            gh release edit "$RELEASE_TAG" --draft --target "$GITHUB_SHA" --title "$RELEASE_TITLE" --notes-file RELEASE_NOTES.md
           else
             gh release create "$RELEASE_TAG" --draft --target "$GITHUB_SHA" --title "$RELEASE_TITLE" --notes-file RELEASE_NOTES.md
           fi
