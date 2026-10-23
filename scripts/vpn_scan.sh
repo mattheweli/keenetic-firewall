@@ -1,158 +1,57 @@
-#!/bin/sh
+#!/opt/bin/bash
+# VPN LOG ANALYZER v2.0.0
+# Release: 2026-10-22 | Stable. See CHANGELOG.md for release details.
 
-# ==============================================================================
-# VPN LOG ANALYZER v1.3.2 (AUTO-DETECT LOG)
-# Features:
-# - LOG SOURCE: Automatically switches between vpn.log and messages.
-# - INTERACTIVE: Echoes status to terminal.
-# - SYNC: Restores IPs from local file to RAM.
-# ==============================================================================
-
-export PATH=/opt/bin:/opt/sbin:/usr/bin:/usr/sbin:/bin:/sbin
-
-# --- PATHS ---
-# Auto-detect Log Source based on Keentool Modular Logging
-if [ -f "/opt/var/log/vpn.log" ]; then
-    LOG_FILE="/opt/var/log/vpn.log"
-    echo -e " -> Mode: ${GREEN}Modular Log${RESET} (Reading vpn.log)"
-else
-    LOG_FILE="/opt/var/log/messages"
-    echo -e " -> Mode: ${YELLOW}Standard Log${RESET} (Reading messages)"
-fi
-
-BANNED_IPS_FILE="/opt/etc/vpn_banned_ips.txt"
-DIFF_FILE_VPN="/opt/etc/firewall_vpn_diff.dat"
-
-IPSET_VPN="VPNBlock"
-IPSET_MAIN="FirewallBlock"
-LOG_TAG="VPN_Blocker"
-
-# Regex for Attack Patterns
-# 1. TLS Error (OpenVPN)
-# 2. Bad Packet Length (WireGuard/OpenVPN overflow)
-SEARCH_PATTERN='TLS handshake failed|Bad encapsulated packet length'
-
-# Colors
-ESC=$(printf '\033')
-RESET="${ESC}[0m"
-BOLD="${ESC}[1m"
-RED="${ESC}[31m"; GREEN="${ESC}[32m"; YELLOW="${ESC}[33m"; CYAN="${ESC}[36m"
-
-# Counters
-CNT_RESTORED=0
-CNT_OPTIMIZED=0
-CNT_BANNED=0
-CNT_SKIPPED=0
-
-# Init
-touch "$BANNED_IPS_FILE"
-echo -e "${BOLD}=== VPN Security Scanner v1.3.2 ===${RESET}"
-
-if [ ! -f "$LOG_FILE" ]; then
-    echo -e "${RED}Error: Log file not found ($LOG_FILE).${RESET}"
-    logger -t "${LOG_TAG}" "Error: Log file missing."
-    exit 1
-fi
-
-# ==============================================================================
-# 1. RESTORE PERSISTENT BANS (File -> RAM)
-# ==============================================================================
-echo -n " -> Syncing persistent bans... "
-if [ -s "$BANNED_IPS_FILE" ]; then
-    # Filter valid IPs only to avoid garbage
-    VALID_IPS=$(grep -Eo '([0-9]{1,3}\.){3}[0-9]{1,3}' "$BANNED_IPS_FILE" | sort -u)
-    
-    IFS=$'\n'
-    for IP in $VALID_IPS; do
-        # Check Main Firewall First (Optimization)
-        if ipset test "$IPSET_MAIN" "$IP" 2>/dev/null; then
-            CNT_OPTIMIZED=$((CNT_OPTIMIZED + 1))
-            continue
-        fi
-        
-        # Check/Add to VPN Set
-        if ! ipset test "$IPSET_VPN" "$IP" 2>/dev/null; then
-            ipset add "$IPSET_VPN" "$IP" 2>/dev/null
-            CNT_RESTORED=$((CNT_RESTORED + 1))
-        fi
-    done
-    unset IFS
-fi
-echo "Done."
-
-# ==============================================================================
-# 2. SCAN LOGS FOR NEW THREATS
-# ==============================================================================
-echo -n " -> Scanning logs for threats... "
-
-# Extract IPs from Log lines matching the pattern
-# Grep logic: Find pattern -> Extract IP using regex
-ATTACKER_IPS=$(grep -E "$SEARCH_PATTERN" "$LOG_FILE" | grep -Eo '([0-9]{1,3}\.){3}[0-9]{1,3}' | sort -u)
-
-if [ -n "$ATTACKER_IPS" ]; then
-    echo ""
-    for IP in $ATTACKER_IPS; do
-        # 1. Check if already Global Banned (Skip)
-        if ipset test "$IPSET_MAIN" "$IP" 2>/dev/null; then
-            echo -e "    - $IP: ${CYAN}Global Blocked${RESET}"
-            continue
-        fi
-        
-        # 2. Check if already VPN Banned
-        if ipset test "$IPSET_VPN" "$IP" 2>/dev/null; then
-            echo -e "    - $IP: ${YELLOW}Already Banned${RESET}"
-            CNT_SKIPPED=$((CNT_SKIPPED + 1))
-        else
-            # 3. BAN HAMMER
-            echo -e "    - $IP: ${RED}BANNING${RESET}"
-            
-            # Add to RAM
-            ipset add "$IPSET_VPN" "$IP" 2>/dev/null
-            
-            # Add to Persistent File (if not present)
-            if ! grep -q "$IP" "$BANNED_IPS_FILE"; then
-                echo "$IP" >> "$BANNED_IPS_FILE"
-            fi
-            
-            # Kill active states
-            ndmc -c "show ip hotspot" | grep -B 5 "$IP" | grep "mac" | awk '{print $3}' | tr -d ',' | while read MAC; do
-                [ -n "$MAC" ] && ndmc -c "ip hotspot disconnect $MAC" >/dev/null 2>&1
-            done
-            
-            # Log action
-            logger -t "${LOG_TAG}" "ACTION: Banned IP $IP (VPN Attack)"
-            
-            CNT_BANNED=$((CNT_BANNED + 1))
-        fi
-    done
-else
-    echo -e "${GREEN}Clean.${RESET}"
-fi
-
-# ==============================================================================
-# 3. DASHBOARD UPDATE & SUMMARY
-# ==============================================================================
-if [ "$CNT_BANNED" -gt 0 ]; then
-    CURRENT_DIFF=0
-    if [ -f "$DIFF_FILE_VPN" ]; then
-        VAL=$(cat "$DIFF_FILE_VPN"); case "$VAL" in ''|*[!0-9+\-]*) VAL=0 ;; esac
-        CURRENT_DIFF="$VAL"
+# VPN LOG ANALYZER v1.3.3 - threshold, whitelist, incremental cursor and expiry
+export PATH=${KT_PATH:-/opt/bin:/opt/sbin:/usr/bin:/usr/sbin:/bin:/sbin}
+. "${KT_COMMON:-/opt/lib/keentool/common.sh}" || exit 1
+kt_init vpn-scan || exit $?
+CONF=${KT_FW_CONF:-/opt/etc/firewall.conf};[ ! -f "$CONF" ] || . "$CONF"
+: "${VPN_FAILURE_THRESHOLD:=5}" "${VPN_FAILURE_WINDOW:=900}" "${VPN_BAN_TIMEOUT:=86400}"
+for value in "$VPN_FAILURE_THRESHOLD" "$VPN_FAILURE_WINDOW" "$VPN_BAN_TIMEOUT"; do [[ "$value" =~ ^[0-9]+$ ]] || exit 1; done
+LOG_FILE=${KT_VPN_LOG:-/opt/var/log/messages};[ -n "${KT_VPN_LOG:-}" ] || { [ ! -f /opt/var/log/vpn.log ] || LOG_FILE=/opt/var/log/vpn.log; }
+[ -f "$LOG_FILE" ] || exit 1
+STATE_DIR=${KT_VPN_STATE:-/opt/etc/keentool/vpn};VPN_SAVE=${KT_VPN_SAVE:-/opt/etc/vpn_banned_ips.txt};export LC_ALL=C; mkdir -p "$STATE_DIR"
+now=${KT_NOW:-$(date +%s)}; inode=$(kt_stat %i "$LOG_FILE"); size=$(wc -c < "$LOG_FILE")
+read -r old_inode offset < "$STATE_DIR/cursor" 2>/dev/null || offset=0
+if [ "${old_inode:-}" != "$inode" ] || [ "$size" -lt "${offset:-0}" ]; then offset=0; fi
+# Copy only the bytes present at this snapshot; last incomplete line is retried.
+if [ "$size" -gt "$offset" ]; then
+    tail -c +$((offset+1)) "$LOG_FILE" | head -c $((size-offset)) > "$KT_WORKDIR/newlog"
+    if [ -s "$KT_WORKDIR/newlog" ] && [ "$(tail -c 1 "$KT_WORKDIR/newlog" | wc -l)" = 0 ];then
+        trailing=$(tail -n 1 "$KT_WORKDIR/newlog")
+        complete=$((size-offset-${#trailing}))
+        head -c "$complete" "$KT_WORKDIR/newlog" > "$KT_WORKDIR/complete"
+        mv "$KT_WORKDIR/complete" "$KT_WORKDIR/newlog"
+        size=$((offset+complete))
     fi
-    NEW_DIFF=$((CURRENT_DIFF + CNT_BANNED))
-    if [ "$NEW_DIFF" -ge 0 ]; then SIGN="+"; else SIGN=""; fi
-    echo "${SIGN}${NEW_DIFF}" > "$DIFF_FILE_VPN"
+    # Do not backfill old logs on first installation; establish cursor only.
+    if [ -f "$STATE_DIR/cursor" ]; then
+        awk '/TLS handshake failed|Bad encapsulated packet length/{for(i=1;i<=NF;i++){x=$i;gsub(/[^0-9.:]/,"",x);if(x~/^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+(:[0-9]+)?$/){sub(/:[0-9]+$/, "",x);print x;break}}}' "$KT_WORKDIR/newlog" |
+        while read -r ip; do printf '%s %s\n' "$now" "$ip"; done >> "$STATE_DIR/failures"
+    fi
 fi
-
-# Visual Summary
-echo -e "-----------------------------------"
-echo -e " ${BOLD}Summary:${RESET}"
-echo -e "  - RAM Restored : ${GREEN}${CNT_RESTORED}${RESET}"
-echo -e "  - Optimized    : ${CYAN}${CNT_OPTIMIZED}${RESET} (Handled by Global)"
-echo -e "  - Skipped      : ${YELLOW}${CNT_SKIPPED}${RESET} (Already Blocked)"
-echo -e "  - New Bans     : ${RED}${CNT_BANNED}${RESET}"
-echo -e "-----------------------------------"
-
-# System Log Summary (Always log if there was ANY activity/check)
-if [ "$CNT_BANNED" -gt 0 ] || [ "$CNT_RESTORED" -gt 0 ]; then
-    logger -t "${LOG_TAG}" "Scan Finished. Restored: $CNT_RESTORED | New Bans: $CNT_BANNED"
-fi
+printf '%s %s\n' "$inode" "$size" > "$STATE_DIR/cursor"
+[ -f "$STATE_DIR/failures" ] || touch "$STATE_DIR/failures"
+awk -v cutoff="$((now-VPN_FAILURE_WINDOW))" '$1>=cutoff' "$STATE_DIR/failures" > "$KT_WORKDIR/recent"
+mv "$KT_WORKDIR/recent" "$STATE_DIR/failures"
+awk -v n="$VPN_FAILURE_THRESHOLD" '{c[$2]++}END{for(ip in c)if(c[ip]>=n)print ip}' "$STATE_DIR/failures" > "$KT_WORKDIR/candidates"
+[ -f "$STATE_DIR/bans" ] || touch "$STATE_DIR/bans"
+# expire only scanner-owned bans; legacy persistent list is preserved independently
+while read -r expiry ip; do
+    if [ "$expiry" -gt "$now" ]; then printf '%s %s\n' "$expiry" "$ip" >> "$KT_WORKDIR/kept"
+    else ipset del VPNBlock "$ip" 2>/dev/null || :; fi
+done < "$STATE_DIR/bans"
+: >> "$KT_WORKDIR/kept"
+while read -r ip; do
+    [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || continue
+    if ipset test FirewallWhite "$ip" >/dev/null 2>&1 || ipset test FirewallBlock "$ip" >/dev/null 2>&1 || ipset test VPNBlock "$ip" >/dev/null 2>&1; then continue; fi
+    case "$ip" in 10.*|127.*|192.168.*|169.254.*|172.1[6-9].*|172.2?.*|172.3[01].*) continue;;esac
+    if ipset add VPNBlock "$ip"; then printf '%s %s\n' "$((now+VPN_BAN_TIMEOUT))" "$ip" >> "$KT_WORKDIR/kept"; logger -t VPN_Blocker "Banned $ip after repeated VPN failures"; fi
+done < "$KT_WORKDIR/candidates"
+mv "$KT_WORKDIR/kept" "$STATE_DIR/bans"
+# Only these current scanner bans are persisted in the legacy file consumed by the hook.
+# Preserve original entries in a separate immutable legacy file on first run.
+if [ ! -f "$STATE_DIR/legacy" ]; then cp "$VPN_SAVE" "$STATE_DIR/legacy" 2>/dev/null || touch "$STATE_DIR/legacy"; fi
+{ cat "$STATE_DIR/legacy"; awk '{print $2}' "$STATE_DIR/bans"; } | sort -u > "$VPN_SAVE.tmp"
+mv "$VPN_SAVE.tmp" "$VPN_SAVE"

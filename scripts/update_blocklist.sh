@@ -1,365 +1,185 @@
-#!/bin/sh
+#!/opt/bin/bash
+# BLOCKLIST UPDATER v3.0.0
+# Release: 2026-10-22 | Stable. See CHANGELOG.md for release details.
 
-# ==============================================================================
-# BLOCKLIST UPDATER v2.4.1 (GEO-PERSISTENCE)
-# Features: 
-# - NEW: GeoIP Persistence (Saves GeoBlock lists to disk for instant restore).
-# - NEW: Download via specific VPN Interface (--interface) to bypass ISP blocks.
-# - NEW: Unified GeoIP aggregate total and difference logic (+X, -X, =0).
-# - NEW: GeoIP Blocking (Downloads aggregated country zones from IPdeny).
-# - CONFIG: Reads /opt/etc/firewall.conf for ENABLE_IPV6 and SOURCE URLS.
-# - REPORTING: Generates a detailed summary in Syslog and Terminal.
-# - LOGIC: Skips Phase 2 (IPv6) completely if disabled.
-# - FIX: Saves IPv4 and IPv6 lists to separate files for reliable restore.
-# - FIX: Silenced curl 404 errors for countries lacking IPv6 allocations.
-# - FIX: 60-second timeouts for curl to handle slow IPdeny connections.
-# ==============================================================================
-
-export PATH=/opt/bin:/opt/sbin:/usr/bin:/usr/sbin:/bin:/sbin
-
-# --- LOAD CONFIG ---
-CONF_FILE="/opt/etc/firewall.conf"
-if [ -f "$CONF_FILE" ]; then
-    . "$CONF_FILE"
-else
-    # Fallbacks if config missing
-    ENABLE_IPV6="true"
-    UPDATE_INTERFACE=""
-    SOURCES_V4="https://iplists.firehol.org/files/firehol_level1.netset https://blocklist.greensnow.co/greensnow.txt"
-    SOURCES_V6="https://www.spamhaus.org/drop/dropv6.txt"
-fi
-
-# Fallback defaults
-: ${UPDATE_INTERFACE:=""}
-: ${ENABLE_IPV6:="true"}
-: ${BANNED_COUNTRIES:=""}
-
-# --- INTERNAL VARS ---
-IPSET_NAME="FirewallBlock"
-IPSET_TMP_NAME="FirewallBlock_TMP"
-IPSET_NAME6="FirewallBlock6"
-IPSET_TMP_NAME6="FirewallBlock6_TMP"
-IPSET_VPN="VPNBlock"
-
-# SETTINGS - CAPACITY
-MAX_ELEM_V4=524288
-MAX_ELEM_V6=65536
-
-# API Key
-# --- SECURE KEY LOADING ---
-KEY_FILE="/opt/etc/AbuseIPDB.key"
-if [ -s "$KEY_FILE" ]; then
-    ABUSEIPDB_KEY=$(cat "$KEY_FILE" | tr -d '[:space:]')
-else
-    ABUSEIPDB_KEY=""
-fi
-ABUSE_CACHE="/opt/etc/abuseipdb_v6.cache"
-CACHE_DURATION=21600
-
-# Files
-DIFF_FILE_V4="/opt/etc/firewall_v4_diff.dat"
-DIFF_FILE_V6="/opt/etc/firewall_v6_diff.dat"
-DIFF_FILE_VPN="/opt/etc/firewall_vpn_diff.dat"
-DIFF_FILE_GEO="/opt/etc/firewall_geo_diff.dat"
-DIFF_FILE_GEO6="/opt/etc/firewall_geo6_diff.dat"
-
-BACKUP_FILE_V4="/opt/etc/firewall_blocklist.save"
-BACKUP_FILE_V6="/opt/etc/firewall_blocklist6.save"
-BACKUP_GEO_V4="/opt/etc/firewall_geoblock.save"
-BACKUP_GEO_V6="/opt/etc/firewall_geoblock6.save"
-
-LOG_TAG="Firewall_Update"
-
-# Trackers for Summary
-RES_V4="0"; CHG_V4="=0"
-RES_V6="0"; CHG_V6="=0"
-RES_VPN="0"; CHG_VPN="0"
-
-calc_diff() {
-    old_cnt=$1; new_cnt=$2; file=$3
-    diff=$((new_cnt - old_cnt))
-    if [ "$diff" -ge 0 ]; then echo "+$diff" > "$file"; else echo "$diff" > "$file"; fi
-}
-
-optimize_list_v4() {
-    IN_FILE=$1; OUT_FILE=$2
-    if command -v iprange >/dev/null 2>&1; then iprange --optimize "$IN_FILE" > "$OUT_FILE"; return 0; else sort -u "$IN_FILE" > "$OUT_FILE"; return 1; fi
-}
-
-load_turbo() {
-    SET_NAME=$1; FILE_CLEAN=$2
-    LINE_COUNT=$(wc -l < "$FILE_CLEAN")
-    echo " -> Loading $LINE_COUNT entries..."
-    sed "s/^/add $SET_NAME /" "$FILE_CLEAN" | ipset restore -!
-}
-
-echo "=== Firewall Blocklist Updater v2.4.1 ==="
-echo "[$(date '+%H:%M:%S')] Starting update. IPv6 Mode: $ENABLE_IPV6"
-
-# --- 1. INIT IPSETS ---
-if ! ipset list -n "$IPSET_NAME" >/dev/null 2>&1; then ipset create "$IPSET_NAME" hash:net hashsize 16384 maxelem $MAX_ELEM_V4 counters -exist; fi
-if [ "$ENABLE_IPV6" = "true" ]; then
-    if ! ipset list -n "$IPSET_NAME6" >/dev/null 2>&1; then ipset create "$IPSET_NAME6" hash:net family inet6 hashsize 4096 maxelem $MAX_ELEM_V6 counters -exist; fi
-fi
-
-# ==============================================================================
-# DOWNLOAD ENGINE SETUP (VPN TUNNEL SUPPORT)
-# ==============================================================================
-CURL_OPTS="-fsSL --connect-timeout 20 --max-time 60"
-if [ -n "$UPDATE_INTERFACE" ]; then
-    CURL_OPTS="$CURL_OPTS --interface $UPDATE_INTERFACE"
-    echo " -> [VPN MODE] Routing downloads through interface: $UPDATE_INTERFACE"
-fi
-
-# --- 2. UPDATE IPv4 ---
-echo "------------------------------------------------"
-echo "PHASE 1: IPv4 Processing"
-CNT_V4_OLD=$(ipset list "$IPSET_NAME" | grep -cE '^[0-9]')
-RAW_FILE="/tmp/blocklist_raw.tmp"
-: > "$RAW_FILE"
-
-if [ -z "$SOURCES_V4" ]; then echo " ! No IPv4 sources selected."; else
-    for URL in $SOURCES_V4; do 
-        echo -n " -> Downloading $(basename "$URL")... "
-        if curl $CURL_OPTS "$URL" >> "$RAW_FILE"; then echo "OK"; else echo "FAIL"; fi
-        echo "" >> "$RAW_FILE"
-    done
-fi
-
-if [ $(wc -l < "$RAW_FILE") -lt 50 ]; then
-    echo " ! ERROR: IPv4 Download failed or empty."
-    echo "=0" > "$DIFF_FILE_V4"
-    RES_V4=$CNT_V4_OLD
-else
-    ipset destroy "$IPSET_TMP_NAME" 2>/dev/null
-    ipset create "$IPSET_TMP_NAME" hash:net hashsize 16384 maxelem $MAX_ELEM_V4 counters -exist
-    
-    CLEAN_FILE="/tmp/blocklist_clean.tmp"
-    FINAL_FILE="/tmp/blocklist_final.tmp"
-    
-    echo -n " -> Filtering & Optimizing (IPv4)... "
-    grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' "$RAW_FILE" | awk '{print $1}' | grep -vE "^#|^$|^0.0.0.0|^127\.|^10\.|^192\.168\.|^172\.(1[6-9]|2[0-9]|3[0-1])\.|^169\.254\." > "$CLEAN_FILE"
-    
-    if optimize_list_v4 "$CLEAN_FILE" "$FINAL_FILE"; then echo "OK (iprange)"; else echo "OK (sort)"; fi
-    
-    load_turbo "$IPSET_TMP_NAME" "$FINAL_FILE"
-    
-    CNT_V4_NEW=$(ipset list "$IPSET_TMP_NAME" | grep -cE '^[0-9]')
-    if ipset swap "$IPSET_TMP_NAME" "$IPSET_NAME"; then
-        ipset save "$IPSET_NAME" > "$BACKUP_FILE_V4"
-        
-        calc_diff "$CNT_V4_OLD" "$CNT_V4_NEW" "$DIFF_FILE_V4"
-        CHG_V4=$(cat "$DIFF_FILE_V4")
-        RES_V4=$CNT_V4_NEW
-        echo " -> Success. Rules: $CNT_V4_NEW ($CHG_V4)"
-        ipset destroy "$IPSET_TMP_NAME"
+# BLOCKLIST UPDATER v2.4.2 - verified per-source cache and checked swaps
+set -o pipefail
+export PATH=${KT_PATH:-/opt/bin:/opt/sbin:/usr/bin:/usr/sbin:/bin:/sbin}
+. "${KT_COMMON:-/opt/lib/keentool/common.sh}" || exit 1
+kt_init firewall-update || exit $?
+CONF_FILE=/opt/etc/firewall.conf
+[ ! -f "$CONF_FILE" ] || . "$CONF_FILE"
+: "${ENABLE_IPV6:=true}" "${UPDATE_INTERFACE:=}" "${BANNED_COUNTRIES:=}"
+: "${SOURCES_V4=https://iplists.firehol.org/files/firehol_level1.netset https://blocklist.greensnow.co/greensnow.txt}"
+: "${SOURCES_V6=https://www.spamhaus.org/drop/dropv6.txt}"
+CACHE_DIR=/opt/etc/keentool/blocklist-cache; mkdir -p "$CACHE_DIR"
+FAILED=0
+valid_list() {
+    local family=$1 input=$2
+    if [ "$family" = inet ]; then
+        awk '{sub(/;.*/,"");if($1 ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+(\/[0-9]+)?$/){split($1,a,"/");n=split(a[1],b,".");ok=n==4;for(i=1;i<=4;i++)if(b[i]>255)ok=0;if(a[2]!="" && a[2]>32)ok=0;if(ok && b[1]!=0 && b[1]!=127 && b[1]<224 && b[1]!=10 && !(b[1]==192 && b[2]==168) && !(b[1]==172 && b[2]>=16 && b[2]<=31) && !(b[1]==169 && b[2]==254))print $1}}' "$input"
     else
-        echo " ! IPv4 Swap Failed."
-        RES_V4=$CNT_V4_OLD
-        ipset destroy "$IPSET_TMP_NAME"
+        awk '{sub(/;.*/,"");if($1 ~ /^[0-9a-fA-F:]+(\/[0-9]+)?$/ && index($1,":") && $1 !~ /^::1(\/|$)/ && $1 !~ /^[fF][eE]80:/)print $1}' "$input"
     fi
-    rm -f "$CLEAN_FILE" "$FINAL_FILE"
-fi
-rm -f "$RAW_FILE"
-
-# --- 3. UPDATE IPv6 ---
-if [ "$ENABLE_IPV6" = "true" ]; then
-    echo "------------------------------------------------"
-    echo "PHASE 2: IPv6 Processing"
-    CNT_V6_OLD=$(ipset list "$IPSET_NAME6" | grep -cE '^[0-9a-fA-F:]')
-    RAW_FILE6="/tmp/blocklist_v6.tmp"
-    : > "$RAW_FILE6"
-
-    if [ -z "$SOURCES_V6" ]; then echo " ! No IPv6 sources selected."; else
-        for URL in $SOURCES_V6; do 
-            echo -n " -> Downloading $(basename "$URL")... "
-            if curl $CURL_OPTS "$URL" >> "$RAW_FILE6"; then echo "OK"; else echo "FAIL"; fi
-            echo "" >> "$RAW_FILE6"
-        done
+}
+source_label() {
+    case "$1" in
+        https://www.ipdeny.com/*) local name=${1##*/};printf 'ipdeny.com (%s)' "${name%-aggregated.zone}";;
+        https://www.spamhaus.org/*) printf 'spamhaus.org';;
+        https://api.abuseipdb.com/*) printf 'AbuseIPDB';;
+        *) printf 'configured source';;
+    esac
+}
+fetch_source() {
+    local family=$1 url=$2 destination=$3 key raw clean cache label status rc code message family_label=IPv4
+    key=$(printf '%s|%s' "$family" "$url" | sha256sum);key=${key%% *}
+    cache="$CACHE_DIR/$key.list";raw="$KT_WORKDIR/raw_$key";clean="$KT_WORKDIR/clean_$key";label=$(source_label "$url")
+    [ "$family" != inet6 ] || family_label=IPv6
+    local -a opts=(-fsSL --connect-timeout 15 --max-time 60 --retry 1 --retry-connrefused --retry-delay 2 --retry-max-time 45)
+    if [[ "$url" = https://api.abuseipdb.com/* ]];then
+        local api_key;api_key=$(cat /opt/etc/AbuseIPDB.key 2>/dev/null) || { LIST_FAILURE_CODE=source_credentials;LIST_FAILURE_DETAIL='AbuseIPDB key could not be read.';return 1; }
+        opts+=(-H "Key: $api_key" -H 'Accept: text/plain')
     fi
-    
-    if [ -n "$ABUSEIPDB_KEY" ]; then
-        echo -n " -> Checking AbuseIPDB API... "
-        CACHE_VALID=0
-        if [ -f "$ABUSE_CACHE" ]; then
-            AGE=$(( $(date +%s) - $(date +%s -r "$ABUSE_CACHE") ))
-            if [ "$AGE" -lt "$CACHE_DURATION" ]; then cat "$ABUSE_CACHE" >> "$RAW_FILE6"; CACHE_VALID=1; echo "Cache Valid."; else echo -n "Expired. "; fi
-        fi
-        if [ "$CACHE_VALID" -eq 0 ]; then
-            curl -s -G https://api.abuseipdb.com/api/v2/blacklist \
-                -d confidenceMinimum=100 -d ipVersion=6 -d maxAgeInDays=30 \
-                -H "Key: $ABUSEIPDB_KEY" -H "Accept: text/plain" -o "$ABUSE_CACHE.tmp"
-            if [ -s "$ABUSE_CACHE.tmp" ] && [ $(wc -c < "$ABUSE_CACHE.tmp") -gt 10 ]; then
-                mv "$ABUSE_CACHE.tmp" "$ABUSE_CACHE"; cat "$ABUSE_CACHE" >> "$RAW_FILE6"; echo "Downloaded."
-            else echo "Failed."; rm -f "$ABUSE_CACHE.tmp"; fi
-        fi
-        echo "" >> "$RAW_FILE6"
+    [ -z "$UPDATE_INTERFACE" ] || opts+=(--interface "$UPDATE_INTERFACE")
+    local -a transport=()
+    [[ "$url" != https://www.ipdeny.com/* ]] || transport=(--ipv4)
+    status=$(curl "${transport[@]}" "${opts[@]}" -w '%{http_code}' "$url" -o "$raw" 2>"$KT_WORKDIR/curl_$key.err");rc=$?
+    if [ "${#transport[@]}" -gt 0 ] && [[ "$rc" = 6 || "$rc" = 7 || "$rc" = 28 || "$rc" = 35 ]];then
+        # Address-family fallback affects HTTP transport only, never prefix validation.
+        status=$(curl "${opts[@]}" -w '%{http_code}' "$url" -o "$raw" 2>"$KT_WORKDIR/curl_$key.err");rc=$?
     fi
-    
-    if [ $(wc -l < "$RAW_FILE6") -lt 10 ]; then
-        echo " ! WARNING: IPv6 empty or failed."
-        echo "=0" > "$DIFF_FILE_V6"
-        RES_V6=$CNT_V6_OLD
-    else
-        ipset destroy "$IPSET_TMP_NAME6" 2>/dev/null
-        ipset create "$IPSET_TMP_NAME6" hash:net family inet6 hashsize 4096 maxelem $MAX_ELEM_V6 counters -exist
-        
-        CLEAN_FILE6="/tmp/blocklist_clean_v6.tmp"
-        echo -n " -> Normalizing & Sorting IPv6... "
-        grep -E '^[0-9a-fA-F:]+' "$RAW_FILE6" | awk '{print $1}' | grep ":" | grep -vE "^#|^$|^::1|^fe80:" | sort -u > "$CLEAN_FILE6"
-        echo "OK"
-        
-        load_turbo "$IPSET_TMP_NAME6" "$CLEAN_FILE6"
-        CNT_V6_NEW=$(ipset list "$IPSET_TMP_NAME6" | grep -cE '^[0-9a-fA-F:]')
-
-        if ipset swap "$IPSET_TMP_NAME6" "$IPSET_NAME6"; then
-            ipset save "$IPSET_NAME6" > "$BACKUP_FILE_V6"
-            
-            calc_diff "$CNT_V6_OLD" "$CNT_V6_NEW" "$DIFF_FILE_V6"
-            CHG_V6=$(cat "$DIFF_FILE_V6")
-            RES_V6=$CNT_V6_NEW
-            echo " -> Success. Rules: $CNT_V6_NEW ($CHG_V6)"
-            ipset destroy "$IPSET_TMP_NAME6"
+    [[ "$status" =~ ^[0-9]{3}$ ]] || status=unknown
+    if [ "$rc" = 0 ];then
+        if ! valid_list "$family" "$raw" | sort -u > "$clean";then
+            code=source_validation;message="$label: source validation failed."
+        elif [ ! -s "$clean" ];then
+            code=source_empty;message="$label: downloaded file contains no usable $family_label prefixes."
+        elif ! cp "$clean" "${cache}.tmp" || ! mv "${cache}.tmp" "$cache";then
+            code=cache_write;message="$label: validated source could not be saved to the cache."
         else
-            echo " ! IPv6 Swap Failed."
-            RES_V6=$CNT_V6_OLD
-            ipset destroy "$IPSET_TMP_NAME6"
+            cat "$cache" >> "$destination" || { LIST_FAILURE_CODE=merge_write;LIST_FAILURE_DETAIL='Source lists could not be merged (check storage).';return 1; }
+            return 0
         fi
-        rm -f "$CLEAN_FILE6"
+    else
+        case "$rc" in
+            6)code=download_dns;message="$label: DNS resolution failed.";;
+            7)code=download_connect;message="$label: connection failed.";;
+            28)code=download_timeout;message="$label: download timed out.";;
+            35|51|60)code=download_tls;message="$label: TLS connection or certificate verification failed.";;
+            22)code=download_http;message="$label: HTTP $status returned by the source.";;
+            *)code=download_failed;message="$label: download failed (curl exit $rc, HTTP $status).";;
+        esac
     fi
-    rm -f "$RAW_FILE6"
-else
-    echo "PHASE 2: IPv6 Processing SKIPPED (Disabled in Config)"
-    RES_V6="Disabled"
-    CHG_V6="-"
+    if [ -s "$cache" ] && valid_list "$family" "$cache" | sort -u > "$clean" && [ -s "$clean" ];then
+        LIST_SOURCE_WARNINGS="${LIST_SOURCE_WARNINGS:+$LIST_SOURCE_WARNINGS }$message Previous cached source used."
+        kt_log "$message Previous cached source used."
+        cat "$clean" >> "$destination" || { LIST_FAILURE_CODE=merge_write;LIST_FAILURE_DETAIL='Cached lists could not be merged (check storage).';return 1; }
+        return 0
+    fi
+    LIST_FAILURE_CODE=$code;LIST_FAILURE_DETAIL="${LIST_FAILURE_DETAIL:+$LIST_FAILURE_DETAIL }$message No valid cache is available; installed list retained."
+    kt_log "$LIST_FAILURE_DETAIL";return 1
+}
+list_security_event() {
+    LIST_EVENT_WRITTEN=true
+    [ ! -x /opt/bin/firewall_security ] || /opt/bin/bash /opt/bin/firewall_security list-event "$@" || kt_log 'Security list event could not be saved'
+}
+reject_list() {
+    local set=$1 code=$2 detail=$3 old=${4:-0} new=${5:-0} expected=${6:-normal}
+    kt_log "$set: $detail"
+    list_security_event "$set" "$old" "$new" "$expected" rejected "$code" "$detail" "${LIST_SOURCE_WARNINGS:-}"
+    return 1
+}
+staging_hint() {
+    local file=$1 line
+    if grep -qiE 'hash is full|maxelem|maximum.*entries' "$file";then printf 'Staging set capacity was exceeded.'
+    elif grep -qiE 'cannot allocate memory|out of memory' "$file";then printf 'Kernel memory allocation failed.'
+    else
+        line=$(sed -nE 's/.*[Ee]rror in line ([0-9]+).*/\1/p' "$file" | head -n 1)
+        printf 'ipset rejected the staged prefixes%s; check address syntax, IPv6 support and set compatibility.' "${line:+ at line $line}"
+    fi
+}
+swap_list() {
+    local set=$1 family=$2 input=$3 backup=$4 diff_file=$5 tmp old new expected=normal policy_sha policy_file error
+    [ -s "$input" ] || { reject_list "$set" merged_empty 'Merged list is empty; installed list retained.';return 1; }
+    sort -u "$input" > "$KT_WORKDIR/sorted_$set" || { reject_list "$set" sort_failed 'List sorting failed; installed list retained.';return 1; }
+    if [ "$family" = inet ] && command -v iprange >/dev/null;then
+        iprange --optimize "$KT_WORKDIR/sorted_$set" > "$KT_WORKDIR/optimized_$set" || { reject_list "$set" optimize_failed 'IPv4 prefix optimization failed; installed list retained.';return 1; }
+        input="$KT_WORKDIR/optimized_$set"
+    else input="$KT_WORKDIR/sorted_$set";fi
+    tmp="${set}_TMP";error="$KT_WORKDIR/ipset_$set.err";ipset destroy "$tmp" 2>/dev/null || :
+    if ! ipset list -n "$set" >/dev/null 2>&1;then
+        ipset create "$set" hash:net family "$family" hashsize 16384 maxelem 524288 counters 2>"$error" || { reject_list "$set" set_create 'Installed set could not be created; check kernel support and memory.';return 1; }
+    fi
+    old=$(ipset save "$set" | awk '$1=="add"{n++}END{print n+0}') || { reject_list "$set" installed_read 'Installed prefix count could not be read; no swap performed.';return 1; }
+    ipset create "$tmp" hash:net family "$family" hashsize 16384 maxelem 524288 counters 2>"$error" || { reject_list "$set" staging_create 'Staging set could not be created; check kernel support, memory or stale staging references.' "$old";return 1; }
+    sed "s/^/add $tmp /" "$input" > "$KT_WORKDIR/load_$set" || { reject_list "$set" staging_file 'Staging input could not be written; installed list retained.' "$old";ipset destroy "$tmp";return 1; }
+    if ! ipset restore -! < "$KT_WORKDIR/load_$set" 2>"$error";then
+        reject_list "$set" staging_load "$(staging_hint "$error") Installed list retained." "$old";ipset destroy "$tmp";return 1
+    fi
+    new=$(ipset save "$tmp" | awk '$1=="add"{n++}END{print n+0}') || { reject_list "$set" staging_read 'Staging prefix count could not be read; installed list retained.' "$old";ipset destroy "$tmp";return 1; }
+    [[ "$new" =~ ^[0-9]+$ ]] && [ "$new" -gt 0 ] || { reject_list "$set" staging_empty 'Staging set is empty; installed list retained.' "$old";ipset destroy "$tmp";return 1; }
+    policy_file="$CACHE_DIR/policy_$set.sha"
+    policy_sha=$(printf '%s' "$set|${BANNED_COUNTRIES:-}|${SOURCES_V4:-}|${SOURCES_V6:-}|${GEOIP_V6_EXCLUDE_COUNTRIES:-}" | sha256sum);policy_sha=${policy_sha%% *}
+    if [ ! -f "$policy_file" ] || [ "$(cat "$policy_file")" != "$policy_sha" ];then expected=baseline;fi
+    # GeoIP size changes are warning-only; invalid/empty/staging failures still stop publication.
+    if [[ "$set" != GeoBlock* ]] && [ "${ALLOW_LARGE_LIST_SHRINK:-false}" != true ] && [ "$old" -gt 100 ] && [ "$new" -lt "$((old/4))" ];then
+        reject_list "$set" shrink_rejected 'Main list shrank by more than 75%; installed list retained.' "$old" "$new" "$expected";ipset destroy "$tmp";return 1
+    fi
+    ipset swap "$tmp" "$set" 2>"$error" || { reject_list "$set" swap_failed 'Kernel set swap failed (check set compatibility); installed list retained.' "$old" "$new" "$expected";ipset destroy "$tmp";return 1; }
+    if ! kt_atomic_save_set "$set" "$backup";then
+        if ipset swap "$tmp" "$set";then
+            reject_list "$set" persistence_failed 'Saving the set failed; previous kernel set restored. Check storage and file permissions.' "$old" "$new" "$expected";ipset destroy "$tmp"
+        else
+            reject_list "$set" rollback_failed 'Saving the set and kernel rollback both failed. Staging set retained for recovery; kernel and saved state may differ.' "$old" "$new" "$expected"
+        fi
+        return 1
+    fi
+    ipset destroy "$tmp" || :
+    printf '%+d\n' "$((new-old))" > "$diff_file"
+    printf '%s\n' "$policy_sha" > "$policy_file"
+    local installed_detail='Validated prefixes installed and saved successfully.'
+    if [ "$set" = GeoBlock6 ] && [ -n "${GEOIP_V6_EXCLUDE_COUNTRIES:-}" ];then installed_detail+=" Explicit IPv6 country exclusions: $GEOIP_V6_EXCLUDE_COUNTRIES.";fi
+    list_security_event "$set" "$old" "$new" "$expected" installed installed "$installed_detail" "${LIST_SOURCE_WARNINGS:-}"
+    kt_log "$set installed: $new entries"
+}
+update_sources() {
+    local family=$1 set=$2 urls=$3 backup=$4 diff=$5 url raw="$KT_WORKDIR/merged_$2" ok=true old=0
+    LIST_EVENT_WRITTEN=false;LIST_FAILURE_CODE='';LIST_FAILURE_DETAIL='';LIST_SOURCE_WARNINGS=''
+    : > "$raw" || { reject_list "$set" merge_write 'Merged list file could not be created; check storage.';return 1; }
+    [ -n "$urls" ] || { kt_log "No sources selected for $set; keeping installed list";return 0; }
+    for url in $urls;do fetch_source "$family" "$url" "$raw" || ok=false;done
+    if [ "$ok" != true ];then
+        old=$(ipset save "$set" 2>/dev/null | awk '$1=="add"{n++}END{print n+0}') || old=0
+        reject_list "$set" "${LIST_FAILURE_CODE:-source_failed}" "${LIST_FAILURE_DETAIL:-Source unavailable; installed list retained.}" "$old";return 1
+    fi
+    swap_list "$set" "$family" "$raw" "$backup" "$diff"
+}
+update_sources inet FirewallBlock "$SOURCES_V4" /opt/etc/firewall_blocklist.save /opt/etc/firewall_v4_diff.dat || FAILED=1
+if [ "$ENABLE_IPV6" = true ]; then
+    if [ -s /opt/etc/AbuseIPDB.key ]; then
+        SOURCES_V6+=" https://api.abuseipdb.com/api/v2/blacklist?confidenceMinimum=100&ipVersion=6&maxAgeInDays=30"
+    fi
+    update_sources inet6 FirewallBlock6 "$SOURCES_V6" /opt/etc/firewall_blocklist6.save /opt/etc/firewall_v6_diff.dat || FAILED=1
 fi
-
-# --- 4. OPTIMIZE VPN ---
-if ipset list -n "$IPSET_VPN" >/dev/null 2>&1; then
-    echo "------------------------------------------------"
-    echo "PHASE 3: VPN Optimization"
-    VPN_START=$(ipset list "$IPSET_VPN" | grep -cE '^[0-9]')
-    CLEAN_COUNT=0
-    for ip in $(ipset list "$IPSET_VPN" | grep -E '^[0-9]'); do
-        if ipset test "$IPSET_NAME" "$ip" >/dev/null 2>&1; then ipset del "$IPSET_VPN" "$ip" 2>/dev/null; CLEAN_COUNT=$((CLEAN_COUNT + 1)); fi
-    done
-    VPN_END=$(ipset list "$IPSET_VPN" | grep -cE '^[0-9]')
-    calc_diff "$VPN_START" "$VPN_END" "$DIFF_FILE_VPN"
-    CHG_VPN=$CLEAN_COUNT
-    RES_VPN=$VPN_END
-    if [ "$CLEAN_COUNT" -gt 0 ]; then echo " -> Optimized: Removed $CLEAN_COUNT IPs."; else echo " -> No redundancy found."; fi
-fi
-
-# --- 4. GEO-IP BLOCKLISTS (Zero-Downtime Swap) ---
+# GeoIP uses the same validated cache engine; missing allocations are not published as an empty set.
 if [ -n "$BANNED_COUNTRIES" ]; then
-    echo "------------------------------------------------"
-    echo "PHASE 4: GeoIP Blocklists ($BANNED_COUNTRIES)"
-    
-    GEO_OLD=$(ipset list GeoBlock 2>/dev/null | grep -cE '^[0-9]')
-    GEO_OLD=${GEO_OLD:-0}
-    GEO6_OLD=0
-    if [ "$ENABLE_IPV6" = "true" ]; then
-        GEO6_OLD=$(ipset list GeoBlock6 2>/dev/null | grep -cE '^[0-9a-fA-F:]')
-        GEO6_OLD=${GEO6_OLD:-0}
-    fi
-
-    : > /tmp/geo_batch.txt
-    : > /tmp/geo6_batch.txt
-    
-    ipset create GeoBlock_TMP hash:net family inet hashsize 1024 maxelem 262144 counters 2>/dev/null
-    ipset flush GeoBlock_TMP
-    
-    if [ "$ENABLE_IPV6" = "true" ]; then
-        ipset create GeoBlock6_TMP hash:net family inet6 hashsize 1024 maxelem 262144 counters 2>/dev/null
-        ipset flush GeoBlock6_TMP
-    fi
-
+    urls4=""; urls6=""
     for country in $BANNED_COUNTRIES; do
-        echo " -> Downloading IPv4 for [$country]..."
-        curl $CURL_OPTS "https://www.ipdeny.com/ipblocks/data/aggregated/${country}-aggregated.zone" 2>/dev/null | awk '{print "add GeoBlock_TMP " $1}' >> /tmp/geo_batch.txt
-        
-        if [ "$ENABLE_IPV6" = "true" ]; then
-            echo " -> Downloading IPv6 for [$country]..."
-            curl $CURL_OPTS "https://www.ipdeny.com/ipv6/ipaddresses/aggregated/${country}-aggregated.zone" 2>/dev/null | awk '{print "add GeoBlock6_TMP " $1}' >> /tmp/geo6_batch.txt
-        fi
+        [[ "$country" =~ ^[a-z]{2}$ ]] || { kt_log "Invalid country: $country"; exit 1; }
+        urls4+=" https://www.ipdeny.com/ipblocks/data/aggregated/${country}-aggregated.zone"
+        case " ${GEOIP_V6_EXCLUDE_COUNTRIES:-} " in
+            *" $country "*)kt_log "GeoBlock6: country $country explicitly excluded by the administrator";;
+            *)urls6+=" https://www.ipdeny.com/ipv6/ipaddresses/aggregated/${country}-aggregated.zone";;
+        esac
     done
-    
-    echo " -> Applying GeoIP rules to kernel..."
-    ipset restore -! < /tmp/geo_batch.txt
-    ipset swap GeoBlock_TMP GeoBlock
-    ipset destroy GeoBlock_TMP
-    
-    # [NEW] GeoIP Persistence
-    ipset save GeoBlock > "$BACKUP_GEO_V4" 2>/dev/null
-    
-    GEO_NEW=$(ipset list GeoBlock 2>/dev/null | grep -cE '^[0-9]')
-    calc_diff "$GEO_OLD" "$GEO_NEW" "$DIFF_FILE_GEO"
-    CHG_GEO=$(cat "$DIFF_FILE_GEO")
-    
-    if [ "$ENABLE_IPV6" = "true" ]; then
-        ipset restore -! < /tmp/geo6_batch.txt
-        ipset swap GeoBlock6_TMP GeoBlock6
-        ipset destroy GeoBlock6_TMP
-        
-        # [NEW] GeoIP Persistence (v6)
-        ipset save GeoBlock6 > "$BACKUP_GEO_V6" 2>/dev/null
-        
-        GEO6_NEW=$(ipset list GeoBlock6 2>/dev/null | grep -cE '^[0-9a-fA-F:]')
-        calc_diff "$GEO6_OLD" "$GEO6_NEW" "$DIFF_FILE_GEO6"
-        CHG_GEO6=$(cat "$DIFF_FILE_GEO6")
-    fi
-    
-    rm -f /tmp/geo_batch.txt /tmp/geo6_batch.txt
-    echo " -> GeoIP Successfully Updated."
+    update_sources inet GeoBlock "$urls4" /opt/etc/firewall_geoblock.save /opt/etc/firewall_geo_diff.dat || FAILED=1
+    [ "$ENABLE_IPV6" != true ] || update_sources inet6 GeoBlock6 "$urls6" /opt/etc/firewall_geoblock6.save /opt/etc/firewall_geo6_diff.dat || FAILED=1
 else
-    if ipset list GeoBlock >/dev/null 2>&1; then 
-        ipset flush GeoBlock 2>/dev/null
-        echo "=0" > "$DIFF_FILE_GEO"
-        > "$BACKUP_GEO_V4"
-    fi
-    if ipset list GeoBlock6 >/dev/null 2>&1; then 
-        ipset flush GeoBlock6 2>/dev/null
-        echo "=0" > "$DIFF_FILE_GEO6"
-        > "$BACKUP_GEO_V6"
-    fi
+    for set in GeoBlock GeoBlock6; do ipset flush "$set" 2>/dev/null || :; done
+    : > /opt/etc/firewall_geoblock.save; : > /opt/etc/firewall_geoblock6.save
 fi
-
-# --- 5. FINALIZE & LOGGING ---
-echo "------------------------------------------------"
-echo -n "Reloading Firewall... "
-if [ -x /opt/etc/ndm/netfilter.d/100-firewall.sh ]; then export table=filter; /opt/etc/ndm/netfilter.d/100-firewall.sh >/dev/null 2>&1; fi
-echo "Done."
-
-# --- SUMMARY REPORT ---
-echo ""
-echo "================================================"
-echo "            BLOCKLIST UPDATE SUMMARY            "
-echo "================================================"
-echo " IPv4 List: $RES_V4 ($CHG_V4)"
-if [ "$ENABLE_IPV6" = "true" ]; then
-    echo " IPv6 List: $RES_V6 ($CHG_V6)"
+# Source overlap is retained in VPNBlock: deleting it would weaken protection when a static source later removes an IP.
+if [ -x /opt/etc/ndm/netfilter.d/100-firewall.sh ]; then
+    table=filter /opt/etc/ndm/netfilter.d/100-firewall.sh || FAILED=1
 fi
-echo " VPN Optimized: $CHG_VPN (Total: $RES_VPN)"
-
-if [ -n "$BANNED_COUNTRIES" ]; then
-    GEO_V4=$(ipset list GeoBlock 2>/dev/null | grep -cE '^[0-9]')
-    GEO_V4=${GEO_V4:-0}
-    GEO_V6=0
-    if [ "$ENABLE_IPV6" = "true" ]; then 
-        GEO_V6=$(ipset list GeoBlock6 2>/dev/null | grep -cE '^[0-9a-fA-F:]')
-        GEO_V6=${GEO_V6:-0}
-    fi
-    
-    TOT_GEO=$((GEO_V4 + GEO_V6))
-    TOT_OLD=$((GEO_OLD + GEO6_OLD))
-    TOT_DIFF=$((TOT_GEO - TOT_OLD))
-    
-    if [ "$TOT_DIFF" -gt 0 ]; then STR_DIFF="+$TOT_DIFF"
-    elif [ "$TOT_DIFF" -lt 0 ]; then STR_DIFF="$TOT_DIFF"
-    else STR_DIFF="=0"; fi
-    
-    echo " GeoIP Lists: $TOT_GEO subnets ($STR_DIFF)"
-fi
-echo "================================================"
-
-logger -t "$LOG_TAG" "UPDATE | IPv4: $RES_V4 ($CHG_V4) | IPv6: $RES_V6 ($CHG_V6) | VPN Opt: $CHG_VPN | GeoIP: ${TOT_GEO:-0} (${STR_DIFF:-=0})"
+exit "$FAILED"

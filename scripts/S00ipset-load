@@ -1,26 +1,40 @@
-#!/bin/sh
+#!/opt/bin/bash
+# IPSET LOADER WRAPPER v2.0.0
+# Release: 2026-10-22 | Stable. See CHANGELOG.md for release details.
+
 # IPSET LOADER WRAPPER (Fixed Logic)
 # v.1.0.0
 # 1. Creates empty set immediately.
 # 2. Applies firewall rules immediately.
 # 3. Updates content after delay.
 
+export PATH=/opt/bin:/opt/sbin:/usr/bin:/usr/sbin:/bin:/sbin
+# IPset Loader 2.0.0
+. "${KT_COMMON:-/opt/lib/keentool/common.sh}" || exit 1
 IPSET_NAME="FirewallBlock"
 LOG_TAG="Firewall_Boot"
 
 start() {
+    if [ -f /opt/lib/keentool/firewall_state.sh ];then
+        . /opt/lib/keentool/firewall_state.sh
+        fw_archive_capture || kt_log 'Could not archive previous capture at startup'
+    fi
     # 1. IMMEDIATE CREATION (Empty Set)
     # Create set immediately, otherwise 100-firewall.sh exits because it can't find it.
     if ! ipset list -n "$IPSET_NAME" >/dev/null 2>&1; then
-        ipset create "$IPSET_NAME" hash:net hashsize 16384 maxelem 131072
+        ipset create "$IPSET_NAME" hash:net hashsize 16384 maxelem 524288 counters
         logger -t "$LOG_TAG" "Empty IPSET created immediately."
     fi
 
+    # Restore last good content before enabling filtering, even without Internet.
+    if [ -f /opt/etc/firewall.conf ];then . /opt/etc/firewall.conf;fi
+    fw_restore_state || { kt_log 'Boot list restore failed; saved files retained';return 1; }
     # 2. APPLY FIREWALL RULES
     # Force loading iptables rules now that the set exists.
     if [ -x /opt/etc/ndm/netfilter.d/100-firewall.sh ]; then
-        table=filter /opt/etc/ndm/netfilter.d/100-firewall.sh
-        logger -t "$LOG_TAG" "Firewall rules applied (on empty set)."
+        if table=filter /opt/etc/ndm/netfilter.d/100-firewall.sh;then
+            logger -t "$LOG_TAG" "Firewall rules applied and verified."
+        else kt_log 'Boot hook failed; inspect saved-state and apply diagnostics';return 1;fi
     fi
 
     # 3. DELAYED UPDATE (Background)
@@ -40,10 +54,17 @@ start() {
 }
 
 stop() {
+    if [ -f /opt/lib/keentool/firewall_state.sh ];then
+        . /opt/lib/keentool/firewall_state.sh
+        fw_checkpoint_state || kt_log 'Shutdown checkpoint failed; previous snapshots retained'
+        fw_archive_capture || kt_log 'Shutdown capture archive failed'
+    fi
     # Save on shutdown
     if command -v ipset >/dev/null; then
-        ipset save "$IPSET_NAME" > "/opt/etc/firewall_blocklist.save"
-        logger -t "$LOG_TAG" "Blocklist saved successfully."
+        if [ "$(cat /tmp/fw-restored-FirewallBlock 2>/dev/null)" = complete-v2 ];then
+            if kt_atomic_save_set "$IPSET_NAME" /opt/etc/firewall_blocklist.save;then logger -t "$LOG_TAG" "Blocklist saved successfully."
+            else kt_log 'Blocklist checkpoint failed; previous snapshot retained';return 1;fi
+        else kt_log 'Skip blocklist checkpoint before verified boot restore; previous snapshot retained';fi
     fi
 }
 
@@ -52,3 +73,4 @@ case "$1" in
     stop) stop ;;
     *) echo "Usage: $0 {start|stop|restart}" ;;
 esac
+
