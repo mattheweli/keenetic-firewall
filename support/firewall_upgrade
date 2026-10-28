@@ -1,0 +1,152 @@
+#!/opt/bin/bash
+# FIREWALL UPGRADE GUARD v1.0.0 — 2026-10-28
+# Private, transaction-bound guardian. Restore owned rules and previous source files.
+set -Eeuo pipefail
+umask 077
+export PATH=${KT_PATH:-${KT_INSTALL_ROOT:-}/opt/bin:/opt/bin:/opt/sbin:/usr/bin:/usr/sbin:/bin:/sbin}
+[ "$(id -u)" = 0 ] || exit 1
+root=${KT_INSTALL_ROOT:-}
+marker="$root/opt/etc/keentool/firewall-upgrade.pending"
+action=${1:-};backup=${2:-};token=${3:-}
+[[ "$token" =~ ^[a-f0-9]{48}$ ]] || { echo 'Invalid firewall transaction token' >&2;exit 1; }
+case "$backup" in "$root"/opt/var/backups/keentool-release/*|"$root"/opt/var/lib/keentool-release/transactions/*);;*)echo 'Invalid recovery directory' >&2;exit 1;;esac
+[[ "${backup##*/}" =~ ^[0-9]{8}_[0-9]{6}-[0-9]+-[a-f0-9]{6}$ ]] && [ ! -L "$backup" ] || exit 1
+php_cli=''
+for p in "$root/opt/bin/php-cli" "$root/opt/bin/php8" "$root/opt/bin/php";do
+ if [ -x "$p" ] && "$p" -r 'exit(PHP_SAPI==="cli"?0:1);' >/dev/null 2>&1;then php_cli=$p;break;fi
+done
+[ -n "$php_cli" ] || exit 1
+"$php_cli" "$backup/release_install.php" verify-backup "$backup"
+work="$backup/firewall-upgrade";runtime=${KT_FW_RUNTIME:-$root/opt/etc/keentool/firewall-runtime}
+hooklock="${KT_RUN_DIR:-/tmp}/firewall-hook.lockdir"
+kt_log(){ printf '%s [firewall-upgrade] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >&2; }
+boot(){ cat /proc/sys/kernel/random/boot_id; }
+mono(){ awk '{print int($1)}' /proc/uptime; }
+phase(){ cat "$work/phase" 2>/dev/null || :; }
+setphase(){ printf '%s\n' "$1" > "$work/phase.new";mv "$work/phase.new" "$work/phase"; }
+marker_matches(){ [ -f "$marker" ] && [ "$(sed -n '1p' "$marker")" = "$backup" ] && [ "$(sed -n '2p' "$marker")" = "$token" ]; }
+lock(){
+ local path=$1 owner i
+ for i in {1..25};do
+  if mkdir "$path" 2>/dev/null;then printf '%s\n' "$$" > "$path/pid";return 0;fi
+  owner=$(cat "$path/pid" 2>/dev/null || :)
+  if [[ "$owner" =~ ^[0-9]+$ ]] && ! kill -0 "$owner" 2>/dev/null;then rm -f "$path/pid";rmdir "$path" 2>/dev/null || :;fi
+  sleep 1
+ done
+ kt_log "Cannot acquire $path";return 1
+}
+unlock(){ [ "$(cat "$1/pid" 2>/dev/null || :)" != "$$" ] || { rm -f "$1/pid";rmdir "$1"; }; }
+stop_apply(){
+ local pid
+ pid=$(cat "$work/apply.pid" 2>/dev/null || :)
+ if [[ "$pid" =~ ^[0-9]+$ ]] && [ -r "/proc/$pid/environ" ] && tr '\0' '\n' < "/proc/$pid/environ" | grep -qxF "KT_FW_UPGRADE_TOKEN=$token";then
+  kill -TERM -- "-$pid" 2>/dev/null || :;sleep 1
+  kill -KILL -- "-$pid" 2>/dev/null || :
+ fi
+}
+restore(){
+ marker_matches || { [ "$(phase)" = rolled-back ] || [ "$(phase)" = confirmed ];return; }
+ stop_apply
+ lock "$work/control.lockdir"
+ local result=0 family tool file savedboot
+ case "$(phase)" in confirmed|rolled-back)unlock "$work/control.lockdir";return 0;;esac
+ setphase restoring
+ lock "$hooklock" || { unlock "$work/control.lockdir";return 1; }
+ savedboot=$(cat "$work/boot")
+ if [ "$savedboot" = "$(boot)" ];then
+  . "$work/firewall_apply.sh"
+  KT_WORKDIR=$work;changed4=true;changed6=true
+  # This routine returns failure for its caller's failed apply even after recovery.
+  fw_recover_transaction || :
+  for family in 4 6;do
+   tool=iptables;[ "$family" = 4 ] || tool=ip6tables
+   fw_snapshot "$tool" "$work/verify$family" || { result=1;continue; }
+   fw_saved_signature "$work/before$family" > "$work/expected$family"
+   fw_saved_signature "$work/verify$family" > "$work/actual$family"
+   cmp -s "$work/expected$family" "$work/actual$family" || result=1
+  done
+ fi
+ if [ "$result" = 0 ];then
+  if [ "$savedboot" = "$(boot)" ];then
+   KT_INSTALL_ROLLBACK=1 bash "$backup/rollback.sh" "$backup" || result=1
+  else
+   # At boot restore source only; the caller then executes the restored hook.
+   "$php_cli" "$backup/release_install.php" rollback "$backup" || result=1
+  fi
+ fi
+ if [ "$result" = 0 ];then
+  mkdir -p "$runtime"
+  for file in rules4 rules6 canonical4 canonical6 config.sha enabled ipv6 ready;do
+   if [ -f "$work/metadata/$file" ];then cp "$work/metadata/$file" "$runtime/$file" || result=1
+   else rm -f "$runtime/$file";fi
+  done
+ fi
+ if [ "$result" = 0 ];then
+  setphase rolled-back;rm -f "$marker";kt_log 'Previous owned rules and source restored; firewall migration remains pending.'
+ else kt_log "CRITICAL: recovery needs attention; keep $backup";fi
+ unlock "$hooklock";unlock "$work/control.lockdir"
+ return "$result"
+}
+case "$action" in
+ prepare)
+  [ ! -e "$marker" ] || { echo 'Another firewall migration is pending' >&2;exit 75; }
+  mkdir -m 700 "$work";mkdir -m 700 "$work/metadata"
+  cp "${KT_FW_APPLY:-$root/opt/lib/keentool/firewall_apply.sh}" "$work/firewall_apply.sh"
+  . "$work/firewall_apply.sh"
+  lock "$hooklock"
+  trap 'unlock "$hooklock"' EXIT
+  fw_snapshot iptables "$work/before4";fw_snapshot ip6tables "$work/before6"
+  for file in rules4 rules6 canonical4 canonical6 config.sha enabled ipv6 ready;do [ ! -f "$runtime/$file" ] || cp "$runtime/$file" "$work/metadata/$file";done
+  boot > "$work/boot";printf '%s\n' "$token" > "$work/token";setphase prepared
+  printf '%s\n%s\n%s\n' "$backup" "$token" "$(boot)" > "$marker.new";mv "$marker.new" "$marker"
+  unlock "$hooklock";trap - EXIT;;
+ run)
+  marker_matches && [ "$(phase)" = prepared ] || exit 1
+  seconds=120
+  if [ -n "$root" ];then seconds=${KT_FW_TEST_SECONDS:-120};[[ "$seconds" =~ ^[0-9]+$ ]] && [ "$seconds" -ge 2 ] && [ "$seconds" -le 300 ] || exit 2;fi
+  printf '%s\n' "$(( $(mono)+seconds ))" > "$work/deadline"
+  (trap '' HUP;exec bash "$backup/firewall_upgrade" guard "$backup" "$token" </dev/null >> "$work/guard.log" 2>&1) &
+  watcher=$!
+  for i in {1..20};do [ -f "$work/guard-ready" ] && kill -0 "$watcher" 2>/dev/null && break;sleep .1;done
+  [ -f "$work/guard-ready" ] && kill -0 "$watcher" 2>/dev/null || { restore;exit 1; }
+  trap 'restore;exit 130' INT
+  trap 'restore;exit 143' TERM
+  setphase applying
+  set -m
+  KT_FW_UPGRADE_TOKEN=$token table=filter bash "${KT_FW_HOOK:-$root/opt/etc/ndm/netfilter.d/100-firewall.sh}" &
+  apply_pid=$!;printf '%s\n' "$apply_pid" > "$work/apply.pid"
+  set +m
+  result=0;wait "$apply_pid" || result=$?;rm -f "$work/apply.pid"
+  if [ "$result" != 0 ] || ! timeout 20 bash "${KT_FW_HEALTH:-$root/opt/bin/firewall_health}" --quiet && [ "$(mono)" -lt "$(cat "$work/deadline")" ];then restore;exit 1;fi
+  lock "$work/control.lockdir"
+  if [ "$(phase)" != applying ];then unlock "$work/control.lockdir";restore;exit 1;fi
+  setphase awaiting-confirmation;unlock "$work/control.lockdir"
+  input=0;opened=false
+  if [ -t 0 ];then :
+  elif [ -t 2 ] && { exec {input}</dev/tty; } 2>/dev/null;then opened=true
+  else restore;exit 1;fi
+  challenge=$("$php_cli" -r 'echo bin2hex(random_bytes(4));')
+  remaining=$(( $(cat "$work/deadline")-$(mono) ))
+  printf '\nBoth firewall families verified. Confirm this SSH session still works.\nType %s within %s seconds to keep the updated firewall: ' "$challenge" "$remaining" >&2
+  answer=''
+  if [ "$remaining" -gt 0 ] && IFS= read -r -t "$remaining" -u "$input" answer && [ "$answer" = "$challenge" ];then
+   lock "$work/control.lockdir"
+   if [ "$(phase)" = awaiting-confirmation ] && [ "$(mono)" -lt "$(cat "$work/deadline")" ] && timeout 20 bash "${KT_FW_HEALTH:-$root/opt/bin/firewall_health}" --quiet && [ "$(mono)" -lt "$(cat "$work/deadline")" ];then
+    setphase confirmed;rm -f "$marker";unlock "$work/control.lockdir"
+    [ "$opened" != true ] || exec {input}<&-
+    kt_log 'Firewall migration confirmed from the interactive SSH session.';exit 0
+   fi
+   unlock "$work/control.lockdir"
+  fi
+  [ "$opened" != true ] || exec {input}<&-
+  restore;exit 1;;
+ guard)
+  marker_matches || exit 1
+  touch "$work/guard-ready"
+  while marker_matches;do
+   if [ "$(mono)" -ge "$(cat "$work/deadline")" ];then restore;exit $?;fi
+   sleep 1
+  done;;
+ abort|recover)restore;;
+ *)echo 'Internal firewall migration action required' >&2;exit 2;;
+esac

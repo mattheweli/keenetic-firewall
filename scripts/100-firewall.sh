@@ -1,5 +1,5 @@
 #!/opt/bin/bash
-# KEENETIC FIREWALL HOOK v3.0.0
+# KEENETIC FIREWALL HOOK v3.0.1
 # Release: 2026-10-22 | Stable. See CHANGELOG.md for release details.
 
 # ==============================================================================
@@ -34,7 +34,7 @@
 case "${1:-}" in --disable|--check) ;; *) [ "${table:-}" = filter ] || exit 0;;esac
 
 
-# Firewall Hook 3.0.0
+# Firewall Hook 3.0.1
 . "${KT_COMMON:-/opt/lib/keentool/common.sh}" || exit 1
 # Wait briefly for the previous hook instead of silently dropping a router event.
 initialized=false
@@ -45,6 +45,25 @@ for attempt in {1..15};do
 done
 [ "$initialized" = true ] || { kt_log 'Hook still busy after 15 seconds; reapply required';exit 75; }
 if [ "${1:-}" = --check ];then /opt/bin/bash "${KT_FW_HEALTH:-/opt/bin/firewall_health}";exit $?;fi
+# FW_UPGRADE_GUARD_V1
+# Hold router-triggered reapplications until the source/rules migration is confirmed.
+fw_upgrade_marker="${KT_INSTALL_ROOT:-}/opt/etc/keentool/firewall-upgrade.pending"
+if [ -f "$fw_upgrade_marker" ];then
+ fw_upgrade_backup=$(sed -n '1p' "$fw_upgrade_marker");fw_upgrade_token=$(sed -n '2p' "$fw_upgrade_marker")
+ [[ "$fw_upgrade_token" =~ ^[a-f0-9]{48}$ ]] || { kt_log 'Invalid pending firewall migration record; apply refused';exit 1; }
+ case "$fw_upgrade_backup" in "${KT_INSTALL_ROOT:-}"/opt/var/backups/keentool-release/*|"${KT_INSTALL_ROOT:-}"/opt/var/lib/keentool-release/transactions/*);;*)kt_log 'Invalid firewall recovery path; apply refused';exit 1;;esac
+ if [ "${KT_FW_UPGRADE_TOKEN:-}" != "$fw_upgrade_token" ];then
+  if [ "$(sed -n '3p' "$fw_upgrade_marker")" != "$(cat /proc/sys/kernel/random/boot_id)" ];then
+   kt_cleanup
+   bash "$fw_upgrade_backup/firewall_upgrade" recover "$fw_upgrade_backup" "$fw_upgrade_token" || exit 1
+   exec "${KT_INSTALL_ROOT:-}/opt/bin/bash" "$0" "$@"
+  fi
+  kt_log 'Guarded firewall upgrade awaiting SSH confirmation; router reapply deferred';exit 75
+ fi
+fi
+# A rollback may have replaced this script while this process waited for the lock.
+if ! grep -qF '# FW_UPGRADE_GUARD_V1' "$0";then kt_cleanup;exec "${KT_INSTALL_ROOT:-}/opt/bin/bash" "$0" "$@";fi
+
 
 export PATH=${KT_PATH:-/opt/bin:/opt/sbin:/usr/bin:/usr/sbin:/bin:/sbin}
 
