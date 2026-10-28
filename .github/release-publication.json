@@ -1,0 +1,28 @@
+{
+  "repository": "mattheweli/keenetic-firewall",
+  "release_id": 426894232,
+  "tag": "v4.0.6",
+  "target": "a483933b72aa0b0d531b7ba237ce6f1413bb1ea4",
+  "validated_run": 40722939393,
+  "pr": 10,
+  "operation_ref": "refs/heads/operations/publish-database-backup-20261028",
+  "merge": true,
+  "base_commit": "444fc7fc209e45f40edefe30aabdb345b5830cba",
+  "source_tree": "f8bbebd615b7c03baac1b8a24d7c5270d657f834",
+  "coordinated_validation": {
+    "repository": "mattheweli/KeenTool",
+    "run": 40722655118,
+    "target": "6bb556e749c6c3067ef7d08f4da0530d10eb3a18",
+    "release": "https://github.com/mattheweli/KeenTool/releases/tag/v2.0.17"
+  },
+  "assets": {
+    "keenetic-firewall-4.0.6-sources.tar.gz": {
+      "size": 173336,
+      "digest": "sha256:ce37f1f5c60f033c80316301f3109e066af5209c2d5eea538185add019fd2823"
+    },
+    "keenetic-firewall-4.0.6-sources.tar.gz.sha256": {
+      "size": 105,
+      "digest": "sha256:9574f32ddd2587376acff3bbf6115eb63b9ada5f9cea7b1494e208b67570c596"
+    }
+  }
+}
