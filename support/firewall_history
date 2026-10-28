@@ -1,0 +1,36 @@
+#!/opt/bin/bash
+# FIREWALL HISTORY CLI v1.0.1 — progressive history policy and offline maintenance.
+export PATH=${KT_PATH:-/opt/bin:/opt/sbin:/usr/bin:/usr/sbin:/bin:/sbin}
+PHP_BIN=${KT_HISTORY_PHP:-}
+if [ -z "$PHP_BIN" ];then
+ for candidate in /opt/bin/php-cli /opt/bin/php8 /opt/bin/php;do
+  if [ -x "$candidate" ] && "$candidate" -r 'exit(PHP_SAPI==="cli"?0:1);' >/dev/null 2>&1;then PHP_BIN=$candidate;break;fi
+ done
+fi
+[ -n "$PHP_BIN" ] || { echo 'PHP CLI required' >&2;exit 1; }
+if [ -z "${TZ:-}" ];then
+    for timezone_file in /etc/TZ /opt/etc/TZ;do
+        if [ -s "$timezone_file" ];then export TZ="$(cat "$timezone_file")";break;fi
+    done
+fi
+ENGINE=${KT_HISTORY_ENGINE:-/opt/lib/keentool/history_engine.php}
+case "${1:-status}" in
+ optimize|compact|expand)
+  action=${1};[ "$action" != optimize ] || action=balanced
+  exec /opt/bin/bash "${KT_DATABASE_CLI:-/opt/bin/keentool_db}" firewall "$action";;
+ menu)
+  "$PHP_BIN" "$ENGINE" status || :
+  echo 'Aggregation keeps all IP/list hit totals, global counters, port history and reporting state.'
+  echo 'Older time precision is reduced permanently. Disabling it cannot restore prior samples.'
+  read -r -p 'Enable aggregation (true/false): ' enabled
+  read -r -p 'Keep original samples for days (1–3650; default 7): ' raw
+  read -r -p 'Keep hourly detail through days (raw–3650; default 30): ' hourly
+  [[ "$enabled" = true || "$enabled" = false ]] && [[ "$raw" =~ ^[0-9]{1,4}$ && "$hourly" =~ ^[0-9]{1,4}$ ]] || { echo 'Invalid settings' >&2;exit 1; }
+  printf '{"HISTORY_ENABLED":"%s","HISTORY_RAW_DAYS":%s,"HISTORY_HOURLY_DAYS":%s}' "$enabled" "$((10#$raw))" "$((10#$hourly))" | "$PHP_BIN" "$ENGINE" configure;;
+ run)
+  . "${KT_COMMON:-/opt/lib/keentool/common.sh}" || exit 1
+  kt_init firewall-db || exit $?
+  "$PHP_BIN" "$ENGINE" "$@";;
+ status)exec "$PHP_BIN" "$ENGINE" status;;
+ *)echo 'Usage: firewall_history [status|menu|run [--due]|optimize|compact|expand]' >&2;exit 1;;
+esac

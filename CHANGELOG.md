@@ -1,3 +1,11 @@
+# keenetic-firewall 4.0.5 / Stats 4.0.2
+
+Optional compact IP history storage replaces repeated IP strings with integer identifiers, with exact row/multiplicity validation and compatible reads/inserts. An explicit balanced 2/7/365-day profile keeps recent samples, then hourly/daily and old calendar-month IP/list totals. All hit totals remain; older temporal boundaries and first/last precision are approximate. Global counters, complete port strings, metadata and report state are unchanged. Unknown schemas/indexes/triggers are refused.
+
+Update through coordinated KeenTool package 2.0.16, then review docs/DATABASE_STORAGE.md. Installing does not convert databases or change existing history settings. Root SSH commands keentool_db firewall compact and keentool_db firewall balanced provide structural-only or balanced optimization with private verified backups. Expansion retains current events for a reviewed storage downgrade; never restore an old database backup as an automatic code rollback. New shared helpers also support lossless Ping/vnStat compaction, with guarded vnStat daemon lifecycle. Manager stays 2.0.11; other tool versions do not change.
+
+Isolated real SQLite/PHP-core tests cover row multiplicity, totals, monthly precision, recent samples, compatibility writes, private backup/failure, idempotence, expansion, custom-index refusal, lossless Ping/traffic data and vnStat service errors. Private user databases are not release/test assets. Physical-router performance and custom init scripts are not verified.
+
 # keenetic-firewall 4.0.4
 
 Fix guardian readiness polling on BusyBox builds which reject fractional sleep. Guardian 1.0.1 uses whole seconds; Hook 3.0.1, Monitor 4.0.0, Stats 4.0.1 and Manager 3.0.0 retain their versions.
