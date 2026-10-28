@@ -2,7 +2,6 @@
 # VPN LOG ANALYZER v2.0.0
 # Release: 2026-10-22 | Stable. See CHANGELOG.md for release details.
 
-# VPN LOG ANALYZER v1.3.3 - threshold, whitelist, incremental cursor and expiry
 export PATH=${KT_PATH:-/opt/bin:/opt/sbin:/usr/bin:/usr/sbin:/bin:/sbin}
 . "${KT_COMMON:-/opt/lib/keentool/common.sh}" || exit 1
 kt_init vpn-scan || exit $?

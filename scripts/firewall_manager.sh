@@ -2,29 +2,6 @@
 # KEENETIC FIREWALL MANAGER v3.0.0
 # Release: 2026-10-22 | Stable. See CHANGELOG.md for release details.
 
-# ==============================================================================
-# KEENETIC FIREWALL MANAGER v2.7.0 (MASTER SWITCH)
-# Changelog:
-#   - NEW: Added support for Manual Blocklists (Blacklist/Blacklist6).
-#   - NEW: Manual Blocklists added to Diagnostics (Active/IP Count).
-#   - NEW: Dedicated Flush option for Manual Blocklists (clears RAM & Backups).
-#   - NEW: Master Kill Switch to globally enable/disable the entire firewall.
-#   - UX: Added visual warning on Main Menu if Firewall is globally disabled.
-#   - NEW: Automatic Interface Wizard to select VPN tunnels for updates.
-#   - NEW: Version 2.6.1 includes real-time IP and Traffic detection for selection.
-#   - NEW: GeoIP Blocking configuration menu (Drop entire countries via IPdeny).
-#   - NEW: Granular DDoS/BruteForce Tuning (Global vs Bypass Limits).
-#   - FIX: port management for clearing entries.
-#   - FEAT: Introduced Granular Port Whitelisting (Sub-chain Architecture).
-#   - FEAT: Interactive Port Wizard to bypass AutoBan, ConnLimit or BruteForce independently.
-#   - UX: Settings are automatically applied on exiting the config menu (Option 0).
-#   - FIX: Restored missing core UI functions (show_header, pause, whitelist_menu).
-#   - FIX: AutoBan list swapped safely when timeout changes (Atomic Swap).
-#   - FEAT: Toggle & Config for DDoS Protection (xt_connlimit) extended to UDP.
-#   - OPS: Dedicated Menu for Flushing specific IP Sets.
-#   - FWD: Toggle for Forward Chain Protection (NAS/DMZ).
-#   - REPORTER: Configuration for AbuseIPDB Reporting Cooldown.
-# ==============================================================================
 
 export PATH=/opt/bin:/opt/sbin:/usr/bin:/usr/sbin:/bin:/sbin
 

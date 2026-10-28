@@ -2,7 +2,6 @@
 # BLOCKLIST UPDATER v3.0.0
 # Release: 2026-10-22 | Stable. See CHANGELOG.md for release details.
 
-# BLOCKLIST UPDATER v2.4.2 - verified per-source cache and checked swaps
 set -o pipefail
 export PATH=${KT_PATH:-/opt/bin:/opt/sbin:/usr/bin:/usr/sbin:/bin:/sbin}
 . "${KT_COMMON:-/opt/lib/keentool/common.sh}" || exit 1

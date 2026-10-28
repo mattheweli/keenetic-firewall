@@ -2,15 +2,6 @@
 # KEENETIC FIREWALL MONITOR v4.0.0
 # Release: 2026-10-22 | Stable. See CHANGELOG.md for release details.
 
-# ==============================================================================
-# KEENETIC FIREWALL MONITOR v3.3.0 (GEOIP EDITION)
-# Features: 
-#   - CONFIG: Reads /opt/etc/firewall.conf to toggle IPv6 monitoring.
-#   - PERFORMANCE: Skips ip6tables calls if IPv6 is disabled.
-#   - ADAPTIVE POLL: Scans fast (4s) when list is empty, slow (30s) when full.
-#   - AUTOBAN: Tracks dynamic AutoBan lists for real-time stats.
-#   - GEOIP: Now aggregates live drops from GeoBlock subnets.
-# ==============================================================================
 
 export PATH=/opt/bin:/opt/sbin:/usr/bin:/usr/sbin:/bin:/sbin
 

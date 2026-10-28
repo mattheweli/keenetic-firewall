@@ -2,34 +2,7 @@
 # KEENETIC FIREWALL HOOK v3.0.1
 # Release: 2026-10-22 | Stable. See CHANGELOG.md for release details.
 
-# ==============================================================================
-# KEENETIC FIREWALL HOOK v2.9.3 (MASTER SWITCH & MANUAL BLACKLISTS)
 # Description: Dual-Stack Firewall with Auto-Ban, Connlimit & Port Logging.
-# Features:
-#   - FIX [v2.9.3]: Removed numeric argument from iptables wait flag (-w) to fix "Bad argument '2'" error on v1.4.21.
-#   - FIX [v2.9.2]: Corrected Manual Blacklist (BLACKLIST/BLACKLIST6) rule insertion for proper modularity.
-#   - FIX [v2.9.2]: Fixed chain jump order (Blacklist before Trap) to ensure correct ULOGD PCAP population.
-#   - FIX [v2.9.1]: Resolved "No chain" errors using a safe 'init_chain' function with '-w' (xtables lock wait).
-#   - FIX [v2.9.1]: Fixed missing linkage for Manual Blocklists (BLACKLIST/BLACKLIST6) to main firewall chains.
-#   - NEW [v2.9.0]: Interactive Manual Blocklists (Blacklist/Blacklist6) via Dashboard.
-#   - NEW [v2.9.0]: Instant persistence and restore for Manual Blocklists.
-#   - NEW [v2.9.0]: RAM cleanup (flush & destroy) for Manual Blocklists on Switch OFF.
-#   - NEW: Restore GeoIP lists from disk if backup files exist.
-#   - NEW: Global Kill Switch (ENABLE_FIREWALL) to flush and disable all rules.
-#   - NEW: GeoIP Blocking integration (Kernel-level drops for banned countries).
-#   - NEW: DDoS Mitigation with Global & Custom Bypass ConnLimits.
-#   - NEW: Sub-chain architecture (FW_CHK_CONN, FW_CHK_BRUTE) for granular bypass.
-#   - NEW: ConnLimit and BruteForce protections now apply to UDP services.
-#   - FIX: load_mod grep mode change.
-#   - FIX: IPv6 static list restore.
-#   - MODULAR: Conditionally loads Connlimit, BruteForce, and AutoBan rules.
-#   - PERSISTENCE: Restores AutoBan lists from disk on startup/restart.
-#   - WHITELIST: High-priority IPSet for trusted IPs/Subnets.
-#   - XT_RECENT: Anti-BruteForce protection (Configurable).
-#   - NAS PROTECTION: Applies AutoBan list to Forwarded traffic (Configurable).
-#   - DNS SAFETY: Prevents banning DNS/DoT providers.
-#   - ULOGD INTEGRATION: Sends logs to userspace (Group 1) instead of tcpdump.
-# ==============================================================================
 
 case "${1:-}" in --disable|--check) ;; *) [ "${table:-}" = filter ] || exit 0;;esac
 

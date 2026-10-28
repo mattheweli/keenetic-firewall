@@ -2,9 +2,6 @@
 # ABUSEIPDB AUTO-REPORTER v3.0.0
 # Release: 2026-10-22 | Stable. See CHANGELOG.md for release details.
 
-# ==============================================================================
-# ABUSEIPDB AUTO-REPORTER v2.2.1 (GEO-IP EDITION)
-# ==============================================================================
 # Description: 
 #   Auto-reports malicious IPs to AbuseIPDB.
 #

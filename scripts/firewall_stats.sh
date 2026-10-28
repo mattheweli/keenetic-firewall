@@ -2,9 +2,6 @@
 # KEENETIC FIREWALL STATS v4.0.1
 # Release: 2026-10-23 | Stable. See CHANGELOG.md for release details.
 
-# ==============================================================================
-# KEENETIC FIREWALL STATS v3.7.2 (INTERACTIVE DASHBOARD)
-# ==============================================================================
 # AUTHOR: mattheweli
 # DESCRIPTION: 
 #   Aggregates firewall statistics, parses sniffer data for port mapping,
