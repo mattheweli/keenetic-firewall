@@ -43,3 +43,5 @@ A separate simulation aged those same records by 31 days, without new incoming e
 ## Compact storage and balanced profile
 
 See [DATABASE_STORAGE.md](DATABASE_STORAGE.md) for explicit IP dictionary conversion, the 2/7/365 balanced profile, optional monthly history and lossless Ping/vnStat compaction. Existing history configuration is preserved during installation. `keentool_db firewall balanced` explicitly selects the new policy; reduced older time precision is permanent.
+
+New fresh installations use Balanced 2/7/365 and request compact storage as of 2.0.18. Existing saved policies are preserved on upgrade. Use KeenTool Firewall → 6 → 2 to explicitly adopt Balanced; see DATABASE_STORAGE.md.
