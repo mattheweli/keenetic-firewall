@@ -2,7 +2,7 @@
 
 **Dual-stack firewall filtering, blocklist maintenance and a web dashboard for Keenetic / Entware.** Uses kernel `ipset` sets and owned iptables chains; performance depends on the router, list sizes and traffic workload.
 
-Current firewall component: **4.0.3**. Independent scripts remain Monitor **4.0.0**, Stats **4.0.1**, Manager **3.0.0** and netfilter hook **3.0.1**. The suite version is not inferred from the Monitor script.
+Current firewall component: **4.0.4**. Independent scripts remain Monitor **4.0.0**, Stats **4.0.1**, Manager **3.0.0** and netfilter hook **3.0.1**. The suite version is not inferred from the Monitor script.
 
 ![Firewall dashboard with IPv4/IPv6 lists and filtering status](https://raw.githubusercontent.com/mattheweli/KeenTool/main/docs/screenshots/firewall.png)
 
@@ -101,3 +101,7 @@ Created and maintained by **mattheweli**. The repository's existing LICENSE appl
 ## Guarded upgrade from Legacy
 
 Update through KeenTool coordinated package 2.0.14. Enabled-firewall migrations require application consent and a fresh SSH confirmation challenge, with independent timeout recovery of previous owned rules and source. Deferral preserves the previous boot hook; disabled firewalls stay disabled. The new hook and private guardian depend on the coordinated installer/runtime. See [FIREWALL_UPGRADE.md](docs/FIREWALL_UPGRADE.md).
+
+## Interrupted 2.0.14 upgrade fix
+
+Use coordinated package 2.0.15 for integer-only BusyBox guardian waits and corrected rollback service handling. If an earlier attempt failed, inspect the retained transaction and use the checksum-verified recovery asset from that release before retrying. Existing source/credentials/data/lists are preserved; an untouched running vnStat is not stopped. Hook and other script versions remain unchanged.

@@ -1,5 +1,5 @@
 #!/opt/bin/bash
-# FIREWALL UPGRADE GUARD v1.0.0 — 2026-10-28
+# FIREWALL UPGRADE GUARD v1.0.1 — 2026-10-28
 # Private, transaction-bound guardian. Restore owned rules and previous source files.
 set -Eeuo pipefail
 umask 077
@@ -107,7 +107,7 @@ case "$action" in
   printf '%s\n' "$(( $(mono)+seconds ))" > "$work/deadline"
   (trap '' HUP;exec bash "$backup/firewall_upgrade" guard "$backup" "$token" </dev/null >> "$work/guard.log" 2>&1) &
   watcher=$!
-  for i in {1..20};do [ -f "$work/guard-ready" ] && kill -0 "$watcher" 2>/dev/null && break;sleep .1;done
+  for i in 1 2 3;do [ -f "$work/guard-ready" ] && kill -0 "$watcher" 2>/dev/null && break;sleep 1;done
   [ -f "$work/guard-ready" ] && kill -0 "$watcher" 2>/dev/null || { restore;exit 1; }
   trap 'restore;exit 130' INT
   trap 'restore;exit 143' TERM
