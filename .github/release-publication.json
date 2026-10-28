@@ -1,0 +1,29 @@
+{
+  "repository": "mattheweli/keenetic-firewall",
+  "release_id": 426758802,
+  "tag": "v4.0.4",
+  "target": "59c9585095d027b0a5e2fcdd08e68235197c256f",
+  "validated_run": 40703946625,
+  "pr": 8,
+  "operation_ref": "refs/heads/operations/publish-busybox-guard-20261028",
+  "merge": true,
+  "base_commit": "86d547d8550d8d099767c9e1f6459cd5a811268a",
+  "source_tree": "88d03953ce15b4a7e2d27b8a6d6623804cc32736",
+  "coordinated_validation": {
+    "repository": "mattheweli/KeenTool",
+    "source": "adcb27377287c0c36d0a340940ae642bb8d9b7a0",
+    "run": 40703753602,
+    "checks": "54/54 passed",
+    "release": "v2.0.15"
+  },
+  "assets": {
+    "keenetic-firewall-4.0.4-sources.tar.gz": {
+      "size": 138623,
+      "digest": "sha256:39bf096a7488f2027a151adf44422f49e2bb9e22cdfe24f0d9f234dccec73960"
+    },
+    "keenetic-firewall-4.0.4-sources.tar.gz.sha256": {
+      "size": 105,
+      "digest": "sha256:13575d527b4d18e104d22b9a1d5c4477883546fa97a83e786dd7672573e76984"
+    }
+  }
+}
