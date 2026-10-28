@@ -1,3 +1,9 @@
+# keenetic-firewall 4.0.6
+
+Explicit balanced maintenance now guarantees a fresh verified backup when the database is already compact. A conversion backup is reused only within the same invocation; an earlier history/normalization backup is not a current recovery copy. Regression fixtures verify first and repeated balanced runs and the current rows in the latest backup.
+
+Includes the optional compact IP dictionary, balanced 2/7/365-day history and shared lossless Ping/vnStat maintenance from 4.0.5. Installation preserves databases/settings until maintenance is explicitly requested. Update through coordinated package 2.0.17 and review docs/DATABASE_STORAGE.md. Database engine 1.0.1; Stats remains 4.0.2, manager 2.0.11 and other tools unchanged. Old temporal precision cannot be restored by expansion or code rollback.
+
 # keenetic-firewall 4.0.5 / Stats 4.0.2
 
 Optional compact IP history storage replaces repeated IP strings with integer identifiers, with exact row/multiplicity validation and compatible reads/inserts. An explicit balanced 2/7/365-day profile keeps recent samples, then hourly/daily and old calendar-month IP/list totals. All hit totals remain; older temporal boundaries and first/last precision are approximate. Global counters, complete port strings, metadata and report state are unchanged. Unknown schemas/indexes/triggers are refused.

@@ -1,5 +1,5 @@
 <?php
-// KEENTOOL DATABASE MAINTENANCE v1.0.0 — private, backup-first CLI only.
+// KEENTOOL DATABASE MAINTENANCE v1.0.1 — private, backup-first CLI only.
 if(PHP_SAPI!=='cli'){http_response_code(403);exit(1);}umask(0077);
 define('KT_HISTORY_LIBRARY',true);require __DIR__.'/history_engine.php';
 try{
@@ -17,6 +17,7 @@ try{
  }else{
   if($action==='expand')$result=ds_expand($db);else $result=ds_normalize($db);
   if($action==='balanced'){
+   if(empty($result['backup']))$result['backup']=ds_backup($db,'balanced');
    hconfigure(['HISTORY_ENABLED'=>'true','HISTORY_RAW_DAYS'=>2,'HISTORY_HOURLY_DAYS'=>7,'HISTORY_DAILY_DAYS'=>365]);
    $result['history']=hrun($db,hconfig(),false);
   }

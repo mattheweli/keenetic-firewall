@@ -1,6 +1,6 @@
 # Compact storage and lossless database maintenance
 
-Package 2.0.16 provides explicit maintenance commands. Installation only installs the helpers; it does not convert databases, change existing history settings or stop vnStat. Run commands as root from SSH with Entware Bash. Every modifying command creates a private integrity-verified SQLite online backup first, requires free working space and uses the same writer lock as the corresponding collector. Keep that database backup independently of the optional installation backup.
+Package 2.0.17 provides explicit maintenance commands. Installation only installs the helpers; it does not convert databases, change existing history settings or stop vnStat. Run commands as root from SSH with Entware Bash. Every modifying command creates a private integrity-verified SQLite online backup first, requires free working space and uses the same writer lock as the corresponding collector. Keep that database backup independently of the optional installation backup.
 
 ## Firewall: recommended balanced profile
 
@@ -53,3 +53,5 @@ Regression checks cover real SQLite/PHP-core conversion, duplicate rows, compati
 ## Private sample measurements
 
 On a private 58,638,336-byte sample, a local SQL structural simulation used 45,768,704 bytes with the IP dictionary alone and 39,247,872 bytes after the balanced profile (approximately 33% smaller). All 31,145,632 hits remained. This sample contains less than one year of IP history, so monthly buckets do not yet contribute to that saving. These figures are dataset-specific SQL simulations, not a live-router execution of the PHP maintenance helper or a future size cap. Synthetic PHP-core regression fixtures separately validate the actual helper. The private database is not distributed or uploaded as a test fixture.
+
+Explicit balanced maintenance creates a fresh verified backup even when compact storage already exists. A conversion backup is reused only within that same invocation. Older history baselines are not treated as current recovery copies.
