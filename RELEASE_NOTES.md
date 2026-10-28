@@ -1,13 +1,9 @@
-# keenetic-firewall 4.0.3
+# keenetic-firewall 4.0.4
 
-Hook 3.0.1 participates in the coordinated suite's guarded migration: explicit application consent, IPv4/IPv6 health verification and a fresh SSH challenge. An independent guardian restores previous owned rules, metadata and source if application fails or confirmation is missing. New router-triggered reapplications are blocked while pending; reboot recovery restores previous source before invoking the old hook.
+Fix guardian readiness polling on BusyBox builds which reject fractional sleep. Guardian 1.0.1 uses whole seconds; Hook 3.0.1, Monitor 4.0.0, Stats 4.0.1 and Manager 3.0.0 retain their versions.
 
-Deferring retains the previous boot hook, including when permanent source backups are declined. Disabled firewalls stay disabled. Foreign router rules, existing bans, credentials, statistics and schedules are preserved. Monitor 4.0.0, Stats 4.0.1 and Manager 3.0.0 keep their versions. The private guard helper source is included for transparency and is installed by the coordinated package, not this component on its own.
+The coordinated package 2.0.15 also fixes rollback service handling: leave untouched running vnStat alone, restore verified source despite service errors and report incomplete recovery. A separate SHA-256-verified recover-firewall-upgrade.sh asset restores an interrupted same-boot 2.0.14 transaction through its original pinned guardian. Keep the recovery directory and inspect phase/logs/services; do not retry 2.0.14 over a pending transaction. See the KeenTool 2.0.15 release and docs/FIREWALL_UPGRADE.md. No password reset, database pruning, list replacement or cron change is introduced.
 
-## Installation
+## Installation and validation
 
-Install/update KeenTool coordinated package **2.0.14** through KeenTool → u, approve guarded application and type the fresh challenge while SSH remains usable. After upgrading the updater, a deferred migration can be retried with `keentool --update --reinstall --apply-firewall`. Do not copy isolated component files into an older suite: the guarded installer, marker handling and independent recovery copies must ship together. See docs/FIREWALL_UPGRADE.md.
-
-## Validation
-
-The coordinated suite's guardian tests exercise the real hook/helper and real file transactions against a mocked kernel, including confirmation/rejection, independent recovery after parent SIGKILL, failed family/restore paths, foreign-rule/bans retention and reboot recovery. The exact successful coordinated release commit and workflow are recorded in the KeenTool release. Physical-router connectivity/reboot is not inferred from isolated tests.
+Update through KeenTool coordinated package 2.0.15. Do not install isolated component files into an older suite. The suite checks force integer-only sleep and reproduce the exact previous guardian/rollback with an untouched-vnStat stop failure, then exercise the standalone recovery entry with real file operations and mocked service/kernel state. No physical-router recovery is claimed. The historical missing web permission ledger warning is separate and is not repaired by guessing permissions.
