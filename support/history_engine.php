@@ -1,5 +1,5 @@
 <?php
-// FIREWALL HISTORY v1.0.1 — progressive, transactional temporal aggregation.
+// FIREWALL HISTORY v1.0.2 — progressive, transactional temporal aggregation.
 // Requires PHP core and sqlite3 CLI; no PHP SQLite extension or shell evaluation.
 if(PHP_SAPI!=='cli'){http_response_code(403);exit(1);}umask(0077);
 function hp($path){return (getenv('KT_HISTORY_ROOT')?:'').$path;}
@@ -15,11 +15,11 @@ function hsql($db,$sql,$readonly=false){
 }
 require_once __DIR__.'/db_storage.php';
 function hconfig(){
-    $values=['HISTORY_ENABLED'=>'true','HISTORY_RAW_DAYS'=>'7','HISTORY_HOURLY_DAYS'=>'30','HISTORY_DAILY_DAYS'=>'0'];$path=hp('/opt/etc/keentool/firewall-history.conf');
+    $values=['HISTORY_ENABLED'=>'true','HISTORY_RAW_DAYS'=>'7','HISTORY_HOURLY_DAYS'=>'30','HISTORY_DAILY_DAYS'=>'0','HISTORY_COMPACT'=>'false'];$path=hp('/opt/etc/keentool/firewall-history.conf');
     if(is_link($path))throw new RuntimeException('History configuration must not be a symbolic link');
     if(is_file($path))foreach(file($path,FILE_IGNORE_NEW_LINES) as $line){if(trim($line)===''||str_starts_with(ltrim($line),'#'))continue;
         if(!preg_match('/^([A-Z_]+)="?(true|false|[0-9]+)"?$/D',trim($line),$m)||!array_key_exists($m[1],$values))throw new RuntimeException('Invalid literal history configuration');$values[$m[1]]=$m[2];}
-    if(!in_array($values['HISTORY_ENABLED'],['true','false'],true)||!preg_match('/^[0-9]+$/D',$values['HISTORY_RAW_DAYS'])||!preg_match('/^[0-9]+$/D',$values['HISTORY_HOURLY_DAYS']))throw new RuntimeException('Invalid history settings');
+    if(!in_array($values['HISTORY_COMPACT'],['true','false'],true)||!in_array($values['HISTORY_ENABLED'],['true','false'],true)||!preg_match('/^[0-9]+$/D',$values['HISTORY_RAW_DAYS'])||!preg_match('/^[0-9]+$/D',$values['HISTORY_HOURLY_DAYS']))throw new RuntimeException('Invalid history settings');
     $raw=(int)$values['HISTORY_RAW_DAYS'];$hourly=(int)$values['HISTORY_HOURLY_DAYS'];if($raw<1||$raw>3650||$hourly<$raw||$hourly>3650)throw new RuntimeException('History days must satisfy 1 <= raw <= hourly <= 3650');$daily=(int)$values['HISTORY_DAILY_DAYS'];if(!preg_match('/^[0-9]+$/D',$values['HISTORY_DAILY_DAYS'])||($daily!==0&&($daily<$hourly||$daily>3650)))throw new RuntimeException('Invalid daily history days');return $values;
 }
 function hzone(){
@@ -34,7 +34,7 @@ function hstatus($db,$conf,$meta=null){
     $meta=$meta??hmeta($db);$raw=(int)$conf['HISTORY_RAW_DAYS'];$hourly=(int)$conf['HISTORY_HOURLY_DAYS'];$daily=(int)$conf['HISTORY_DAILY_DAYS'];
     $monthly=$daily?"After $daily days, older complete calendar months use monthly IP buckets. Calendar-day/rolling-window boundaries inside them are approximate.":'Monthly aggregation is disabled; existing monthly buckets, if any, keep their reduced precision.';
     $note=($conf['HISTORY_ENABLED']==='true'?'':'Further aggregation is disabled. ')."Configured IP history: samples for $raw days, hourly through $hourly days, then daily. Total hits per IP/list are preserved. Time windows crossing a bucket boundary and historical first/last timestamps are approximate. Increasing thresholds or disabling aggregation cannot restore earlier detail. Global counters and port history are unchanged. ".$monthly;
-    return ['enabled'=>$conf['HISTORY_ENABLED']==='true','raw_days'=>$raw,'hourly_days'=>$hourly,'daily_days'=>$daily,'storage'=>ds_compact($db)?'compact':'legacy','aggregated'=>isset($meta['first_run']),
+    return ['enabled'=>$conf['HISTORY_ENABLED']==='true','raw_days'=>$raw,'hourly_days'=>$hourly,'daily_days'=>$daily,'storage'=>ds_compact($db)?'compact':'legacy','compact_requested'=>$conf['HISTORY_COMPACT']==='true','aggregated'=>isset($meta['first_run']),
         'last_run'=>(int)($meta['last_run']??0),'backup'=>$meta['backup']??null,'monthly_note'=>$monthly,'note'=>$note];
 }
 function hatomic($path,$text){
@@ -42,19 +42,20 @@ function hatomic($path,$text){
     $tmp=tempnam($dir,'.history-');if(!$tmp)throw new RuntimeException('Cannot create private state');try{if(file_put_contents($tmp,$text)!==strlen($text)||!chmod($tmp,0600)||!rename($tmp,$path))throw new RuntimeException('Cannot save history state');}finally{if(is_file($tmp))unlink($tmp);}
 }
 function hconfigure($input=null){
-    $input=$input??json_decode(stream_get_contents(STDIN),true,512,JSON_THROW_ON_ERROR);if(!is_array($input)||array_diff(array_keys($input),['HISTORY_ENABLED','HISTORY_RAW_DAYS','HISTORY_HOURLY_DAYS','HISTORY_DAILY_DAYS']))throw new InvalidArgumentException('Invalid history settings');
-    $old=hconfig();$new=array_merge($old,$input);if(!in_array($new['HISTORY_ENABLED'],['true','false'],true))throw new InvalidArgumentException('Use true or false');
+    $input=$input??json_decode(stream_get_contents(STDIN),true,512,JSON_THROW_ON_ERROR);if(!is_array($input)||array_diff(array_keys($input),['HISTORY_ENABLED','HISTORY_RAW_DAYS','HISTORY_HOURLY_DAYS','HISTORY_DAILY_DAYS','HISTORY_COMPACT']))throw new InvalidArgumentException('Invalid history settings');
+    $old=hconfig();$new=array_merge($old,$input);if(!in_array($new['HISTORY_COMPACT'],['true','false'],true)||!in_array($new['HISTORY_ENABLED'],['true','false'],true))throw new InvalidArgumentException('Use true or false');
     foreach(['HISTORY_RAW_DAYS','HISTORY_HOURLY_DAYS','HISTORY_DAILY_DAYS'] as $key)if(!is_int($new[$key])&&!preg_match('/^[0-9]+$/D',(string)$new[$key]))throw new InvalidArgumentException('Integer days required');
     $raw=(int)$new['HISTORY_RAW_DAYS'];$hourly=(int)$new['HISTORY_HOURLY_DAYS'];if($raw<1||$raw>3650||$hourly<$raw||$hourly>3650)throw new InvalidArgumentException('History days must satisfy 1 <= raw <= hourly <= 3650');
     $daily=(int)$new['HISTORY_DAILY_DAYS'];if($daily!==0&&($daily<$hourly||$daily>3650))throw new InvalidArgumentException('Daily days must be zero (no monthly rollup), or hourly through 3650');
     $path=hp('/opt/etc/keentool/firewall-history.conf');if(is_file($path))hatomic(hp('/opt/var/backups/keentool-history-config/'.gmdate('Ymd_His').'-'.bin2hex(random_bytes(4)).'.conf'),file_get_contents($path));
-    hatomic($path,'# Firewall IP history; time precision is reduced, hit totals are preserved.'."\nHISTORY_ENABLED=\"".$new['HISTORY_ENABLED']."\"\nHISTORY_RAW_DAYS=\"$raw\"\nHISTORY_HOURLY_DAYS=\"$hourly\"\nHISTORY_DAILY_DAYS=\"$daily\"\n");return ['saved'=>true,'raw_days'=>$raw,'hourly_days'=>$hourly];
+    hatomic($path,'# Firewall IP history; time precision is reduced, hit totals are preserved.'."\nHISTORY_ENABLED=\"".$new['HISTORY_ENABLED']."\"\nHISTORY_RAW_DAYS=\"$raw\"\nHISTORY_HOURLY_DAYS=\"$hourly\"\nHISTORY_DAILY_DAYS=\"$daily\"\nHISTORY_COMPACT=\"".$new['HISTORY_COMPACT']."\"\n");return ['saved'=>true,'raw_days'=>$raw,'hourly_days'=>$hourly];
 }
 function hrun($db,$conf,$due){
     $zone=hzone();$meta=hmeta($db);$now=(int)(getenv('KT_HISTORY_NOW')?:time());
     if($conf['HISTORY_ENABLED']!=='true')return hstatus($db,$conf,$meta)+['skipped'=>'disabled'];
     if($due&&isset($meta['last_run'])&&$now-(int)$meta['last_run']<86400)return hstatus($db,$conf,$meta)+['skipped'=>'not due'];
     if(isset($meta['timezone'])&&$meta['timezone']!==$zone)throw new RuntimeException('History timezone changed; restore the previous router timezone before aggregating existing buckets');
+    if($conf['HISTORY_COMPACT']==='true'&&!ds_compact($db))ds_normalize($db);
     if(hsql($db,'PRAGMA quick_check;',true)!=='ok')throw new RuntimeException('Database integrity check failed; no aggregation performed');
     $columns=explode('|',hsql($db,"SELECT group_concat(name,'|') FROM pragma_table_info('ip_drops');",true));
     if($columns!==['timestamp','ip','count','list_type']&&$columns!==['timestamp','ip','count','list_type','resolution'])throw new RuntimeException('Unexpected ip_drops schema; no aggregation performed');

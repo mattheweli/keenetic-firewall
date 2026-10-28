@@ -1,5 +1,5 @@
 #!/opt/bin/bash
-# FIREWALL HISTORY CLI v1.0.1 — progressive history policy and offline maintenance.
+# FIREWALL HISTORY CLI v1.0.2 — progressive history policy and offline maintenance.
 export PATH=${KT_PATH:-/opt/bin:/opt/sbin:/usr/bin:/usr/sbin:/bin:/sbin}
 PHP_BIN=${KT_HISTORY_PHP:-}
 if [ -z "$PHP_BIN" ];then
@@ -19,14 +19,42 @@ case "${1:-status}" in
   action=${1};[ "$action" != optimize ] || action=balanced
   exec /opt/bin/bash "${KT_DATABASE_CLI:-/opt/bin/keentool_db}" firewall "$action";;
  menu)
-  "$PHP_BIN" "$ENGINE" status || :
-  echo 'Aggregation keeps all IP/list hit totals, global counters, port history and reporting state.'
-  echo 'Older time precision is reduced permanently. Disabling it cannot restore prior samples.'
-  read -r -p 'Enable aggregation (true/false): ' enabled
-  read -r -p 'Keep original samples for days (1–3650; default 7): ' raw
-  read -r -p 'Keep hourly detail through days (raw–3650; default 30): ' hourly
-  [[ "$enabled" = true || "$enabled" = false ]] && [[ "$raw" =~ ^[0-9]{1,4}$ && "$hourly" =~ ^[0-9]{1,4}$ ]] || { echo 'Invalid settings' >&2;exit 1; }
-  printf '{"HISTORY_ENABLED":"%s","HISTORY_RAW_DAYS":%s,"HISTORY_HOURLY_DAYS":%s}' "$enabled" "$((10#$raw))" "$((10#$hourly))" | "$PHP_BIN" "$ENGINE" configure;;
+  while :;do
+   echo
+   echo 'Firewall history / database optimization'
+   echo '----------------------------------------'
+   echo ' 1. Show current policy and storage'
+   echo ' 2. Apply Balanced profile now (recommended: 2 / 7 / 365 days)'
+   echo ' 3. Configure custom history precision'
+   echo ' 4. Run maintenance now using the saved policy'
+   echo ' 0. Back'
+   read -r -p 'Select: ' choice || exit 0
+   case "$choice" in
+    0|'')exit 0;;
+    1) "$PHP_BIN" "$ENGINE" status || :;;
+    2)
+     echo 'Creates a verified database backup and converts repeated IPs to compact identifiers.'
+     echo 'Keeps raw samples for 2 days, hourly through 7 days, daily through 365 days, then monthly.'
+     echo 'All hit totals and complete port history remain; older time precision is permanently reduced.'
+     read -r -p 'Apply Balanced and optimize now? [y/N] ' answer || exit 0
+     case "$answer" in y|Y)
+      if bash "${KT_DATABASE_CLI:-/opt/bin/keentool_db}" firewall balanced;then
+       echo 'Balanced profile applied. Run firewall_stats.sh force to refresh the dashboard.'
+      else echo 'Balanced maintenance failed; review the output before retrying.' >&2;fi;;
+     esac;;
+    3)
+     echo 'Saving custom settings does not run maintenance immediately. Existing compact storage is retained.'
+     read -r -p 'Enable aggregation (true/false; default true): ' enabled || exit 0
+     read -r -p 'Original sample days (1–3650; default 2): ' raw || exit 0
+     read -r -p 'Hourly detail through days (raw–3650; default 7): ' hourly || exit 0
+     read -r -p 'Daily detail through days (hourly–3650, or 0 for no monthly rollup; default 365): ' daily || exit 0
+     enabled=${enabled:-true};raw=${raw:-2};hourly=${hourly:-7};daily=${daily:-365}
+     if [[ "$enabled" != true && "$enabled" != false ]] || [[ ! "$raw" =~ ^[0-9]{1,4}$ || ! "$hourly" =~ ^[0-9]{1,4}$ || ! "$daily" =~ ^[0-9]{1,4}$ ]];then echo 'Invalid settings' >&2;continue;fi
+     printf '{"HISTORY_ENABLED":"%s","HISTORY_RAW_DAYS":%s,"HISTORY_HOURLY_DAYS":%s,"HISTORY_DAILY_DAYS":%s}' "$enabled" "$((10#$raw))" "$((10#$hourly))" "$((10#$daily))" | "$PHP_BIN" "$ENGINE" configure || :;;
+    4) bash "$0" run || :;;
+    *)echo 'Invalid selection';;
+   esac
+  done;;
  run)
   . "${KT_COMMON:-/opt/lib/keentool/common.sh}" || exit 1
   kt_init firewall-db || exit $?

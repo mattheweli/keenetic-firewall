@@ -1,6 +1,6 @@
 # Compact storage and lossless database maintenance
 
-Package 2.0.17 provides explicit maintenance commands. Installation only installs the helpers; it does not convert databases, change existing history settings or stop vnStat. Run commands as root from SSH with Entware Bash. Every modifying command creates a private integrity-verified SQLite online backup first, requires free working space and uses the same writer lock as the corresponding collector. Keep that database backup independently of the optional installation backup.
+Package 2.0.18 provides explicit maintenance commands. Installation only installs the helpers; it does not convert databases, change existing history settings or stop vnStat. Run commands as root from SSH with Entware Bash. Every modifying command creates a private integrity-verified SQLite online backup first, requires free working space and uses the same writer lock as the corresponding collector. Keep that database backup independently of the optional installation backup.
 
 ## Firewall: recommended balanced profile
 
@@ -55,3 +55,11 @@ Regression checks cover real SQLite/PHP-core conversion, duplicate rows, compati
 On a private 58,638,336-byte sample, a local SQL structural simulation used 45,768,704 bytes with the IP dictionary alone and 39,247,872 bytes after the balanced profile (approximately 33% smaller). All 31,145,632 hits remained. This sample contains less than one year of IP history, so monthly buckets do not yet contribute to that saving. These figures are dataset-specific SQL simulations, not a live-router execution of the PHP maintenance helper or a future size cap. Synthetic PHP-core regression fixtures separately validate the actual helper. The private database is not distributed or uploaded as a test fixture.
 
 Explicit balanced maintenance creates a fresh verified backup even when compact storage already exists. A conversion backup is reused only within that same invocation. Older history baselines are not treated as current recovery copies.
+
+## KeenTool menu and fresh-install defaults (2.0.18)
+
+Open KeenTool → 3 Firewall Suite → 6 History aggregation settings → 2 Apply Balanced profile now. The action explains the backup and permanent older time-precision change and requires y confirmation. Option 1 shows status/storage, option 3 saves custom precision including the monthly threshold, option 4 runs maintenance with the current policy and option 0 returns. Decline/EOF does not run conversion.
+
+Fresh mode writes HISTORY_ENABLED=true, HISTORY_RAW_DAYS=2, HISTORY_HOURLY_DAYS=7, HISTORY_DAILY_DAYS=365 and HISTORY_COMPACT=true. Conversion occurs after schema initialization in the first due firewall statistics cycle, not in the installer. It takes a verified backup even if no samples are old enough to aggregate yet. Subsequent aggregation uses the existing daily cadence.
+
+An upgrade preserves existing history files exactly. Omitted compact/daily fields in legacy files mean false/0, preserving the older policy; a missing history file in upgrade mode gets the legacy defaults. Existing users explicitly select Balanced to convert/apply immediately. Web Settings also exposes compact storage and Balanced preset values; changes there wait for the next due maintenance. Turning compact off does not expand current data. Explicit keentool_db firewall expand disables future automatic conversion, retains current events and cannot restore reduced time precision.

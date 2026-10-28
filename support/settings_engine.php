@@ -1,5 +1,5 @@
 <?php
-// KEENTOOL WEB SETTINGS v1.0.2 — 2026-10-23, stable.
+// KEENTOOL WEB SETTINGS v1.0.3 — 2026-10-23, stable.
 // Typed fixed-file configuration only; never evaluate shell input or return unrelated secrets.
 if(PHP_SAPI!=='cli'||!function_exists('kdispatch')){http_response_code(403);exit(1);}
 function ksettingsspec() {
@@ -22,9 +22,10 @@ function ksettingsspec() {
     $p['RETENTION_DAYS']['help']='Increasing is allowed. Lowering retention can delete stored samples and remains a CLI operation.';
     $add($p,'WAN_LABEL','WAN notification label','interfaces','');$add($p,'WAN_SYSLOG_ENABLED','PPP syslog monitoring','bool',true);
     $h=[];$add($h,'HISTORY_ENABLED','Aggregate older IP history','bool',true,['section'=>'History precision']);
-    $add($h,'HISTORY_RAW_DAYS','Original sample detail (days)','int',7,['min'=>1,'max'=>3650,'presets'=>[['value'=>7],['value'=>14],['value'=>30],['value'=>90]],'unit'=>'days','section'=>'History precision']);
-    $add($h,'HISTORY_HOURLY_DAYS','Hourly detail through (days)','int',30,['min'=>1,'max'=>3650,'presets'=>[['value'=>30],['value'=>60],['value'=>90],['value'=>365]],'unit'=>'days','section'=>'History precision','help'=>'Must be at least the original-sample days. Older records become daily buckets. No IP/list hit totals, global counters or port histories are removed.']);
+    $add($h,'HISTORY_RAW_DAYS','Original sample detail (days)','int',7,['min'=>1,'max'=>3650,'presets'=>[['value'=>2],['value'=>7],['value'=>14],['value'=>30],['value'=>90]],'unit'=>'days','section'=>'History precision']);
+    $add($h,'HISTORY_HOURLY_DAYS','Hourly detail through (days)','int',30,['min'=>1,'max'=>3650,'presets'=>[['value'=>7],['value'=>30],['value'=>60],['value'=>90],['value'=>365]],'unit'=>'days','section'=>'History precision','help'=>'Must be at least the original-sample days. Older records become daily buckets. No IP/list hit totals, global counters or port histories are removed.']);
     $add($h,'HISTORY_DAILY_DAYS','Daily detail through (days; 0 disables monthly rollup)','int',0,['min'=>0,'max'=>3650,'presets'=>[['value'=>0],['value'=>365],['value'=>730]],'unit'=>'days','section'=>'History precision','help'=>'Use 0 to keep daily buckets indefinitely, or at least the hourly days. Older complete calendar months become monthly IP/list totals. Global counters and port history remain unchanged.']);
+    $add($h,'HISTORY_COMPACT','Enable compact IP storage','bool',false,['section'=>'History precision','help'=>'Conversion runs at the next due statistics maintenance, after a verified backup. Turning this off does not expand already compact storage. Fresh installations use the Balanced 2/7/365 profile with this enabled; existing settings are preserved.']);
     $t=[];$add($t,'MONTHLY_QUOTA_GB','Monthly traffic quota (GB; 0 = off)','decimal',0,['min'=>0,'max'=>1000000000]);$add($t,'VNSTAT_ALIASES','Interface aliases (in configured interface order)','interfaces','',['help'=>'One space-separated alias per interface. Interface selection and job schedules remain in KeenTool.']);
     $sec=[];$securityDefaults=['monitor_interval'=>60,'email_enabled'=>true,'immediate_alerts'=>true,'digest_hour'=>7,'timezone'=>'Europe/Rome','guard_seconds'=>120,'management_networks'=>[],'list_shrink_percent'=>50,'list_growth_percent'=>100,'geo_shrink_percent'=>90,'geo_growth_percent'=>300];foreach($securityDefaults as $k=>$v){
         $label=ucfirst(str_replace('_',' ',$k));
