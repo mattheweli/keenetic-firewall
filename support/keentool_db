@@ -1,0 +1,51 @@
+#!/opt/bin/bash
+# KEENTOOL DATABASE CLI v1.0.0. Explicit maintenance; no collection or rule changes.
+set -eu
+export PATH=${KT_PATH:-/opt/bin:/opt/sbin:/usr/bin:/usr/sbin:/bin:/sbin}
+kind=${1:-};action=${2:-status}
+case "$kind:$action" in firewall:status|firewall:compact|firewall:balanced|firewall:expand|ping:status|ping:compact|traffic:status|traffic:compact) ;; *) echo 'Usage: keentool_db firewall {status|compact|balanced|expand} | ping|traffic {status|compact}' >&2;exit 2;;esac
+[ "$#" = 2 ] || { echo 'Specify a database and action' >&2;exit 2; }
+[ "$(id -u)" = 0 ] || { echo 'Run as root' >&2;exit 1; }
+PHP_BIN=${KT_HISTORY_PHP:-}
+if [ -z "$PHP_BIN" ];then
+ for candidate in /opt/bin/php-cli /opt/bin/php8 /opt/bin/php;do
+  if [ -x "$candidate" ] && "$candidate" -r 'exit(PHP_SAPI==="cli"?0:1);' >/dev/null 2>&1;then PHP_BIN=$candidate;break;fi
+ done
+fi
+[ -n "$PHP_BIN" ] || { echo 'PHP CLI required' >&2;exit 1; }
+if [ "$action" != status ];then
+ . "${KT_COMMON:-/opt/lib/keentool/common.sh}" || exit 1
+ case "$kind" in firewall)kt_init firewall-db;;ping)kt_init pingtool;;traffic)kt_init traffic-manager;;esac
+fi
+if [ "$kind" = traffic ];then
+ if [ -z "${KT_VNSTAT_DB:-}" ];then
+  vnstat_conf=${KT_VNSTAT_CONF:-/opt/etc/vnstat.conf}
+  database_dir=$(awk '/^[[:space:]]*DatabaseDir[[:space:]]+"/ { sub(/^[^"]*"/, "");sub(/".*/, "");print;exit }' "$vnstat_conf" 2>/dev/null || :)
+  [ -n "$database_dir" ] || database_dir=/opt/var/lib/vnstat
+  export KT_VNSTAT_DB="$database_dir/vnstat.db"
+ fi
+ if [ "$action" = compact ] && pidof vnstatd >/dev/null 2>&1;then
+  vnstat_init=${KT_VNSTAT_INIT:-}
+  if [ -z "$vnstat_init" ];then
+   for candidate in /opt/etc/init.d/S*vnstat*;do
+    [ -f "$candidate" ] && [ -x "$candidate" ] && [ ! -L "$candidate" ] || continue
+    [ -z "$vnstat_init" ] || { echo 'Multiple vnStat init scripts; review manually' >&2;exit 1; }
+    vnstat_init=$candidate
+   done
+  fi
+  [ -n "$vnstat_init" ] && [ -x "$vnstat_init" ] || { echo 'A unique executable vnStat init script is required' >&2;exit 1; }
+  finish_traffic() {
+   rc=$?;trap - EXIT
+   if ! pidof vnstatd >/dev/null 2>&1;then "$vnstat_init" start || rc=1;pidof vnstatd >/dev/null 2>&1 || rc=1;fi
+   kt_cleanup
+   [ "$rc" = 0 ] || echo 'Traffic maintenance/restart incomplete; retain the printed backup and inspect vnStat' >&2
+   exit "$rc"
+  }
+  trap finish_traffic EXIT
+  echo 'Stopping vnStat briefly for lossless database compaction; previous running state will be restored.'
+  "$vnstat_init" stop || exit 1
+  for attempt in {1..10};do pidof vnstatd >/dev/null 2>&1 || break;sleep 1;done
+  if pidof vnstatd >/dev/null 2>&1;then echo 'vnStat did not stop; database left unchanged' >&2;exit 1;fi
+ fi
+fi
+"$PHP_BIN" "${KT_DATABASE_ENGINE:-/opt/lib/keentool/database_engine.php}" "$kind" "$action"

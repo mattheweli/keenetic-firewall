@@ -1,5 +1,5 @@
 #!/opt/bin/bash
-# KEENETIC FIREWALL STATS v4.0.1
+# KEENETIC FIREWALL STATS v4.0.2
 # Release: 2026-10-23 | Stable. See CHANGELOG.md for release details.
 
 # AUTHOR: mattheweli
@@ -30,7 +30,7 @@
 # ==============================================================================
 
 export PATH=${KT_PATH:-/opt/bin:/opt/sbin:/usr/bin:/usr/sbin:/bin:/sbin}
-# Firewall Stats 4.0.1
+# Firewall Stats 4.0.2
 . "${KT_COMMON:-/opt/lib/keentool/common.sh}" || exit 1
 kt_init firewall-db || exit $?
 sqlite3() { kt_sqlite "$@"; }
@@ -68,6 +68,11 @@ if [ "${1:-}" = --optimize-db ]; then
     chmod 600 "$DB_BACKUP" || exit 1
     [ "$(sqlite3 "$DB_BACKUP" 'PRAGMA quick_check;')" = ok ] || { echo 'Backup verification failed; no optimization performed' >&2;exit 1; }
     echo "Verified database backup: $DB_BACKUP"
+    if [ "$(sqlite3 "$DB_FILE" "SELECT type FROM sqlite_master WHERE name='ip_drops';")" = view ]; then
+        sqlite3 "$DB_FILE" 'VACUUM; PRAGMA wal_checkpoint(TRUNCATE);' || exit 1
+        echo 'Compact storage retained; database vacuumed. Backup retained.'
+        exit 0
+    fi
     # Refuse unexpected operator-defined indexes instead of overwriting their definition.
     for INDEX_NAME in idx_list_ts idx_list_ts_ip;do
         INDEX_TABLE=$(sqlite3 "$DB_FILE" "SELECT tbl_name FROM sqlite_master WHERE type='index' AND name='$INDEX_NAME';") || exit 1
@@ -163,7 +168,7 @@ NOW=${KT_NOW:-$($DATE_CMD +%s)}
 NEW_DROPS_V4=0; NEW_DROPS_V6=0; NEW_DROPS_VPN=0; NEW_DROPS_TRAP=0; NEW_DROPS_TRAP6=0; NEW_DROPS_GEO=0; NEW_DROPS_GEO6=0; NEW_DROPS_MANUAL=0; NEW_DROPS_MANUAL6=0
 NEW_IP_RECORDS=0
 
-echo "=== Firewall Stats Updater v4.0.1 ==="
+echo "=== Firewall Stats Updater v4.0.2 ==="
 
 # ==============================================================================
 # 3. DATABASE INITIALIZATION & TUNING
@@ -226,7 +231,7 @@ fi
     # Keep existing installations unchanged until explicit --optimize-db maintenance.
     # A compact index is sufficient because hit counts already require table access.
     HAS_LIST_TIME=$(sqlite3 "$DB_FILE" "SELECT count(*) FROM sqlite_master WHERE type='index' AND tbl_name='ip_drops' AND name IN ('idx_list_ts','idx_list_ts_ip');")
-    if [ "$HAS_LIST_TIME" = 0 ]; then
+    if [ "$HAS_LIST_TIME" = 0 ] && [ "$(sqlite3 "$DB_FILE" "SELECT type FROM sqlite_master WHERE name='ip_drops';")" = table ]; then
         echo " -> Adding compact list/time index idx_list_ts..."
         sqlite3 "$DB_FILE" "CREATE INDEX IF NOT EXISTS idx_list_ts ON ip_drops(list_type,timestamp);"
     fi
