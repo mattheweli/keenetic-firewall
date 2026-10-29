@@ -1,5 +1,5 @@
 <?php
-// KEENTOOL WEB SETTINGS v1.0.3 — 2026-10-23, stable.
+// KEENTOOL WEB SETTINGS v1.0.4 — 2026-10-23, stable.
 // Typed fixed-file configuration only; never evaluate shell input or return unrelated secrets.
 if(PHP_SAPI!=='cli'||!function_exists('kdispatch')){http_response_code(403);exit(1);}
 function ksettingsspec() {
@@ -27,7 +27,7 @@ function ksettingsspec() {
     $add($h,'HISTORY_DAILY_DAYS','Daily detail through (days; 0 disables monthly rollup)','int',0,['min'=>0,'max'=>3650,'presets'=>[['value'=>0],['value'=>365],['value'=>730]],'unit'=>'days','section'=>'History precision','help'=>'Use 0 to keep daily buckets indefinitely, or at least the hourly days. Older complete calendar months become monthly IP/list totals. Global counters and port history remain unchanged.']);
     $add($h,'HISTORY_COMPACT','Enable compact IP storage','bool',false,['section'=>'History precision','help'=>'Conversion runs at the next due statistics maintenance, after a verified backup. Turning this off does not expand already compact storage. Fresh installations use the Balanced 2/7/365 profile with this enabled; existing settings are preserved.']);
     $t=[];$add($t,'MONTHLY_QUOTA_GB','Monthly traffic quota (GB; 0 = off)','decimal',0,['min'=>0,'max'=>1000000000]);$add($t,'VNSTAT_ALIASES','Interface aliases (in configured interface order)','interfaces','',['help'=>'One space-separated alias per interface. Interface selection and job schedules remain in KeenTool.']);
-    $sec=[];$securityDefaults=['monitor_interval'=>60,'email_enabled'=>true,'immediate_alerts'=>true,'digest_hour'=>7,'timezone'=>'Europe/Rome','guard_seconds'=>120,'management_networks'=>[],'list_shrink_percent'=>50,'list_growth_percent'=>100,'geo_shrink_percent'=>90,'geo_growth_percent'=>300];foreach($securityDefaults as $k=>$v){
+    $sec=[];$securityDefaults=['monitor_interval'=>60,'email_enabled'=>true,'immediate_alerts'=>true,'digest_enabled'=>true,'digest_hour'=>7,'timezone'=>'Europe/Rome','guard_seconds'=>120,'management_networks'=>[],'list_shrink_percent'=>50,'list_growth_percent'=>100,'geo_shrink_percent'=>90,'geo_growth_percent'=>300];foreach($securityDefaults as $k=>$v){
         $label=ucfirst(str_replace('_',' ',$k));
         if(is_bool($v))$add($sec,$k,$label,'bool',$v);
         elseif($k==='timezone')$add($sec,$k,'Summary timezone','timezone','Europe/Rome');
@@ -62,7 +62,7 @@ function ksettingsspec() {
     $preset($sec,'monitor_interval',[30,60,120,300,600,1800,3600],'seconds');$preset($sec,'guard_seconds',[30,60,120,180,300],'seconds');
     $sec['digest_hour']['choices']=array_map(fn($hour)=>['value'=>$hour,'label'=>sprintf('%02d:00',$hour)],range(0,23));
     $sec['timezone']['presets']=array_map(fn($zone)=>['value'=>$zone,'label'=>$zone],['Europe/Rome','Europe/London','Europe/Paris','Europe/Berlin','UTC','America/New_York','Asia/Tokyo']);
-    $sec['guard_seconds']['label']='Firewall confirmation window';$sec['monitor_interval']['label']='Health check interval';$sec['digest_hour']['label']='Daily summary time';
+    $sec['guard_seconds']['label']='Firewall confirmation window';$sec['monitor_interval']['label']='Health check interval';$sec['digest_hour']['label']='Daily summary time';$sec['digest_enabled']['label']='Daily summary email';$sec['digest_enabled']['help']='Disable the daily Security & Health summary while keeping immediate health/blocklist alerts enabled. The master email setting still controls all Security & Health email.';
     $sec['management_networks']['help']='Space-separated IP addresses or CIDR networks that manual bans must never overlap. At most 32 networks.';
     return ['firewall'=>['title'=>'Firewall and blocklists','path'=>'/opt/etc/firewall.conf','fields'=>$f,'note'=>'Saving applies the hook with timed rollback. Confirm the new policy before the deadline. GeoIP/source changes are used at the next scheduled list update; lists are not downloaded by this form.'],
         'firewall_history'=>['title'=>'Firewall history','path'=>'/opt/etc/keentool/firewall-history.conf','fields'=>$h,'note'=>'Once daily at the next firewall statistics run: keep recent samples, then hourly, then daily buckets. A verified backup precedes the first aggregation. Reduced time precision cannot be restored by increasing thresholds or disabling this policy. Period boundaries crossing a bucket are approximate. Firewall rules are not reapplied.'],

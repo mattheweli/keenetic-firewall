@@ -1,5 +1,5 @@
 #!/opt/bin/bash
-# FIREWALL UPGRADE GUARD v1.0.1 — 2026-10-28
+# FIREWALL UPGRADE GUARD v1.0.2 — 2026-10-29
 # Private, transaction-bound guardian. Restore owned rules and previous source files.
 set -Eeuo pipefail
 umask 077
@@ -95,6 +95,14 @@ case "$action" in
   . "$work/firewall_apply.sh"
   lock "$hooklock"
   trap 'unlock "$hooklock"' EXIT
+  case "${4:-manual}" in
+   manual);;
+   automatic)
+    state=$("$php_cli" "$backup/release_install.php" firewall-state "${5:-}")
+    printf '%s' "$state" | "$php_cli" -r '$s=json_decode(stream_get_contents(STDIN),true,512,JSON_THROW_ON_ERROR);exit(($s["auto_apply"]??false)===true?0:1);' || { echo 'Automatic firewall update requires a recognized healthy managed hook' >&2;exit 1; }
+    touch "$work/automatic-approved";;
+   *)echo 'Invalid firewall approval mode' >&2;exit 2;;
+  esac
   fw_snapshot iptables "$work/before4";fw_snapshot ip6tables "$work/before6"
   for file in rules4 rules6 canonical4 canonical6 config.sha enabled ipv6 ready;do [ ! -f "$runtime/$file" ] || cp "$runtime/$file" "$work/metadata/$file";done
   boot > "$work/boot";printf '%s\n' "$token" > "$work/token";setphase prepared
@@ -117,9 +125,16 @@ case "$action" in
   apply_pid=$!;printf '%s\n' "$apply_pid" > "$work/apply.pid"
   set +m
   result=0;wait "$apply_pid" || result=$?;rm -f "$work/apply.pid"
-  if [ "$result" != 0 ] || ! timeout 20 bash "${KT_FW_HEALTH:-$root/opt/bin/firewall_health}" --quiet && [ "$(mono)" -lt "$(cat "$work/deadline")" ];then restore;exit 1;fi
+  if [ "$result" != 0 ] || ! timeout 20 bash "${KT_FW_HEALTH:-$root/opt/bin/firewall_health}" --quiet || [ "$(mono)" -ge "$(cat "$work/deadline")" ];then restore;exit 1;fi
   lock "$work/control.lockdir"
   if [ "$(phase)" != applying ];then unlock "$work/control.lockdir";restore;exit 1;fi
+  if [ -f "$work/automatic-approved" ];then
+   if [ "$(mono)" -lt "$(cat "$work/deadline")" ] && timeout 20 bash "${KT_FW_HEALTH:-$root/opt/bin/firewall_health}" --quiet && [ "$(mono)" -lt "$(cat "$work/deadline")" ];then
+    setphase confirmed;rm -f "$marker";unlock "$work/control.lockdir"
+    kt_log 'Managed firewall update automatically verified for both families; no repeat activation confirmation required.';exit 0
+   fi
+   unlock "$work/control.lockdir";restore;exit 1
+  fi
   setphase awaiting-confirmation;unlock "$work/control.lockdir"
   input=0;opened=false
   if [ -t 0 ];then :

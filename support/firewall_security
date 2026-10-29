@@ -1,0 +1,47 @@
+#!/opt/bin/bash
+# KEENTOOL SECURITY CLI v1.0.1 — 2026-10-22, stable.
+export PATH=${KT_PATH:-/opt/bin:/opt/sbin:/usr/bin:/usr/sbin:/bin:/sbin}
+for candidate in /opt/bin/php-cli /opt/bin/php8 /opt/bin/php;do
+ if [ -x "$candidate" ] && "$candidate" -r 'exit(PHP_SAPI==="cli"?0:1);' >/dev/null 2>&1;then PHP_BIN=$candidate;break;fi
+done
+[ -n "${PHP_BIN:-}" ] || { echo 'PHP CLI required' >&2;exit 1; }
+ENGINE=/opt/lib/keentool-security/security_engine.php
+case "${1:-status}" in
+ menu)
+  while true;do
+   printf '\nKeenTool Security\n1. System health\n2. Recent events\n3. Policy bypass review\n4. Protect management networks\n5. Monitor interval (30–3600 seconds)\n6. Daily email summary hour (0–23)\n7. All Security & Health email on/off\nD. Daily summary email on/off\n8. Review web isolation\n9. Apply web isolation (backup and validation)\nL. Configure NFLOG rate (0 disables sampling)\nG. GeoIP warning thresholds\nB. Blocklist warning thresholds\nT. Summary timezone (IANA name)\nR. Roll back web isolation\n0. Back\n'
+   read -r -p 'Select: ' choice
+   case "$choice" in
+    0)break;;1)"$PHP_BIN" "$ENGINE" status;;
+    2)printf '%s\n' '{"action":"audit","actor":"local"}' | "$PHP_BIN" "$ENGINE" request;;
+    3)"$PHP_BIN" "$ENGINE" status;;
+    4)read -r -p 'Management CIDRs, separated by spaces (empty to clear custom entries): ' networks
+      printf '%s' "$networks" | "$PHP_BIN" -r '$v=preg_split("/\\s+/",trim(stream_get_contents(STDIN)),-1,PREG_SPLIT_NO_EMPTY);echo json_encode(["management_networks"=>$v]);' | "$PHP_BIN" "$ENGINE" settings;;
+    5)read -r -p 'Seconds: ' value;[[ "$value" =~ ^[0-9]+$ ]] && printf '{"monitor_interval":%s}' "$value" | "$PHP_BIN" "$ENGINE" settings;;
+    6)read -r -p 'Local hour: ' value;[[ "$value" =~ ^[0-9]+$ ]] && printf '{"digest_hour":%s}' "$value" | "$PHP_BIN" "$ENGINE" settings;;
+    7)read -r -p 'Email enabled (true/false): ' value;[[ "$value" = true || "$value" = false ]] && printf '{"email_enabled":%s}' "$value" | "$PHP_BIN" "$ENGINE" settings;;
+    D|d)read -r -p 'Daily summary email enabled (true/false): ' value;[[ "$value" = true || "$value" = false ]] && printf '{"digest_enabled":%s}' "$value" | "$PHP_BIN" "$ENGINE" settings;;
+    8)/opt/bin/bash /opt/lib/keentool-security/harden_web.sh --check;;
+    9)/opt/bin/bash /opt/lib/keentool-security/harden_web.sh --apply;;
+    L)read -r -p 'Packets per second per NFLOG rule (0–1000): ' rate;read -r -p 'Burst (1–10000): ' burst
+      if [[ "$rate" =~ ^[0-9]+$ && "$burst" =~ ^[0-9]+$ ]] && [ "$rate" -le 1000 ] && [ "$burst" -ge 1 ] && [ "$burst" -le 10000 ];then
+       cp -p /opt/etc/firewall.conf /opt/etc/firewall.conf.before-security-log
+       temp=$(mktemp /opt/etc/firewall.conf.XXXXXX)
+       awk '!/^FW_LOG_RATE=|^FW_LOG_BURST=/' /opt/etc/firewall.conf > "$temp"
+       printf 'FW_LOG_RATE=%s\nFW_LOG_BURST=%s\n' "$rate" "$burst" >> "$temp";chmod 600 "$temp";mv "$temp" /opt/etc/firewall.conf
+       if ! table=filter /opt/bin/bash /opt/etc/ndm/netfilter.d/100-firewall.sh;then cp -p /opt/etc/firewall.conf.before-security-log /opt/etc/firewall.conf;table=filter /opt/bin/bash /opt/etc/ndm/netfilter.d/100-firewall.sh || :;fi
+      fi;;
+    G|B)read -r -p 'Warn on shrink percentage (1–100): ' shrink;read -r -p 'Warn on growth percentage (1–1000): ' growth
+      if [[ "$shrink" =~ ^[0-9]+$ && "$growth" =~ ^[0-9]+$ ]];then
+       prefix=geo;[ "$choice" = G ] || prefix=list
+       printf '{"%s_shrink_percent":%s,"%s_growth_percent":%s}' "$prefix" "$shrink" "$prefix" "$growth" | "$PHP_BIN" "$ENGINE" settings
+      fi;;
+    T)read -r -p 'Timezone (for example Europe/Rome): ' zone
+      printf '%s' "$zone" | "$PHP_BIN" -r 'echo json_encode(["timezone"=>stream_get_contents(STDIN)]);' | "$PHP_BIN" "$ENGINE" settings;;
+    R)/opt/bin/bash /opt/lib/keentool-security/harden_web.sh --rollback;;
+   esac
+  done;;
+ harden-web)exec /opt/bin/bash /opt/lib/keentool-security/harden_web.sh "${2:---check}";;
+ service)exec /opt/bin/bash /opt/bin/keentool_security_service "${2:-status}";;
+ *)exec "$PHP_BIN" "$ENGINE" "$@";;
+esac
