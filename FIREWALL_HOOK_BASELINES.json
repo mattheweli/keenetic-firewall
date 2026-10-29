@@ -1,0 +1,8 @@
+{
+  "format": 1,
+  "description": "Recognized coordinated guarded hooks eligible for automatic verified updates after a healthy installation. Unknown/custom/legacy hooks still require first-migration consent.",
+  "sha256": [
+    "16cb480035f695492105e4901e7eff1aeb40b3207aaef60af93b034180e2d714",
+    "29547d49d231c98fab38ca7387d8beffc9fa33fcb1c73c787542232267fa5780"
+  ]
+}

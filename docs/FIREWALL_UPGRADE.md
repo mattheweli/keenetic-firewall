@@ -1,5 +1,13 @@
 # Guarded firewall migration
 
+## Current upgrade behavior (2.0.19 / 4.0.8)
+
+The general coordinated-update confirmation remains. A healthy managed installation already using a recognized guarded-hook source no longer needs repeated activation consent or a fresh SSH challenge for each hook update. The verified package contains FIREWALL_HOOK_BASELINES.json; release validation requires the current hook hash. Eligibility also requires a managed stable firewall version and current health. Unknown/custom/legacy source or an unhealthy baseline is not silently adopted. Disabled firewalls stay disabled.
+
+When an eligible hook needs application, the installer revalidates automatic eligibility under the hook lock, prepares the same owned-rule/source snapshots and independent guardian, commits source and applies with the pending transaction token. Automatic confirmation requires successful family health checks before the deadline. No terminal is required for this already-adopted path. Failure or loss of the applying parent before confirmation triggers the existing independent recovery. A completed update never waits 120 seconds unnecessarily.
+
+First legacy/custom migration retains the initial apply prompt and fresh SSH challenge described below. Deferral retains the previous hook. No-start mode does not apply rules. Future releases changing hook source must add the new current hash and retain explicitly eligible prior stable hashes in the source baseline list. Local modifications are not guessed as approved.
+
 From package 2.0.14, use KeenTool → u to update an enabled Legacy or existing firewall. If the hook changes or health is not verified, review the guarded application prompt. The installer snapshots previous owned filter rules and runtime metadata, verifies source recovery copies, and blocks unsolicited applications of the new hook while pending. A detached guardian survives the SSH session and the monitoring service.
 
 After the hook applies and both families match their expected enabled/disabled configuration, type the newly displayed challenge to confirm this SSH session remains reachable. The 120-second monotonic deadline starts before application. Without timely confirmation, or on apply/health failure, recovery restores previous owned rules and source files. Foreign router rules and existing set contents are preserved. This is a two-family transaction with checked recovery, not an atomic kernel commit across IPv4 and IPv6. If recovery reports an error, retain the printed private backup directory and its firewall-upgrade/guard.log for review.

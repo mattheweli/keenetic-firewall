@@ -2,7 +2,7 @@
 
 **Dual-stack firewall filtering, blocklist maintenance and a web dashboard for Keenetic / Entware.** Uses kernel `ipset` sets and owned iptables chains; performance depends on the router, list sizes and traffic workload.
 
-Current firewall component: **4.0.7**. Independent scripts remain Monitor **4.0.0**, Stats **4.0.2**, Manager **3.0.0** and netfilter hook **3.0.1**. The suite version is not inferred from the Monitor script.
+Current firewall component: **4.0.8**. Independent scripts remain Monitor **4.0.0**, Stats **4.0.2**, Manager **3.0.0** and netfilter hook **3.0.1**. The suite version is not inferred from the Monitor script.
 
 ![Firewall dashboard with IPv4/IPv6 lists and filtering status](https://raw.githubusercontent.com/mattheweli/KeenTool/main/docs/screenshots/firewall.png)
 
@@ -125,3 +125,5 @@ Firewall 4.0.5 / Stats 4.0.2 adds optional compact IP identifiers and a balanced
 Firewall 4.0.6 / package 2.0.17 adds a fresh verified backup for every explicit balanced-profile invocation, including already compact databases. Stats remains 4.0.2.
 
 Firewall 4.0.7 / package 2.0.18 adds KeenTool Firewall → 6 → 2 for confirmed Balanced optimization. Fresh installations default to Balanced/compact storage at first due maintenance; existing upgrade settings are preserved. See docs/DATABASE_STORAGE.md.
+
+Firewall 4.0.8 / package 2.0.19 adds a separate Daily summary email switch and automatic verified updates for healthy recognized adopted hooks, retaining first legacy/custom migration review and independent rollback. See the email/upgrade guides.

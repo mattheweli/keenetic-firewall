@@ -1,5 +1,5 @@
 <?php
-// KEENTOOL SECURITY ENGINE v1.0.3 — 2026-10-23, stable.
+// KEENTOOL SECURITY ENGINE v1.0.4 — 2026-10-23, stable.
 // Root-only local command broker, audit, guarded policy changes and monitoring.
 if (PHP_SAPI !== 'cli') { http_response_code(403); exit(1); }
 umask(0077);
@@ -31,7 +31,7 @@ function krun($argv,$limit=15,$max=4194304) {
     if($code<0)$code=$last;return [$code,$out,$err];
 }
 function kconfig() {
-    $defaults=['monitor_interval'=>60,'email_enabled'=>true,'immediate_alerts'=>true,'digest_hour'=>7,'timezone'=>'Europe/Rome','guard_seconds'=>120,'management_networks'=>[], 'list_shrink_percent'=>50,'list_growth_percent'=>100,'geo_shrink_percent'=>90,'geo_growth_percent'=>300];
+    $defaults=['monitor_interval'=>60,'email_enabled'=>true,'immediate_alerts'=>true,'digest_enabled'=>true,'digest_hour'=>7,'timezone'=>'Europe/Rome','guard_seconds'=>120,'management_networks'=>[], 'list_shrink_percent'=>50,'list_growth_percent'=>100,'geo_shrink_percent'=>90,'geo_growth_percent'=>300];
     return array_merge($defaults,kread(kp('/opt/etc/keentool/security/settings.json')));
 }
 function kconf() {
@@ -295,12 +295,20 @@ function ktick() {
         $key=hash('sha256',json_encode($issues));$consecutive=$key===($old['issue_key']??'')?($old['consecutive']??0)+1:1;
         if($issues&&$consecutive>=2&&$key!==($old['notified_key']??'')&&!empty($settings['immediate_alerts'])&&$now-($old['started']??$now)>=180){kqueue('health','KeenTool: security health warning',implode("\n",$issues));$old['notified_key']=$key;kaudit('health','health warning','warning','local','',implode('; ',$issues));}
         if(!$issues&&!empty($old['had_issues'])){kaudit('health','health recovered');$old['notified_key']='';}
-        $date=date('Y-m-d');if((int)date('G')>=(int)$settings['digest_hour']&&($old['digest_date']??'')!==$date){
+        $date=date('Y-m-d');if(!empty($settings['digest_enabled'])&&(int)date('G')>=(int)$settings['digest_hour']&&($old['digest_date']??'')!==$date){
             $digest=kdigest($system,$events);kqueue('digest-'.$date,'KeenTool: daily security summary',$digest['body'],$digest['html']);$old['digest_date']=$date;
         }
         $state=array_merge($old,['started'=>$old['started']??$now,'issue_key'=>$key,'consecutive'=>$consecutive,'had_issues'=>(bool)$issues,'last_check'=>$now]);kwrite($statePath,$state);
         $public=kp('/opt/var/www/firewall/security-data.json');$dir=dirname($public);if(!is_dir($dir))mkdir($dir,0755,true);kwrite($public,['system'=>$system,'events'=>$events,'comparisons'=>$comparisons,'coverage_note'=>'Counters describe recorded IP hits. Port comparisons attribute each IP to its latest target_port metadata; they are not per-port packet measurements. Country metadata is current, including for historical periods.'.khistorynote()],0644);
     }finally{kunlock($lock);}
+    // Read the current preference again before delivery and discard queued summaries only.
+    $settings=kconfig();
+    if(empty($settings['digest_enabled'])){
+        $qlock=klock('notifications');try{
+            $qPath=kp('/opt/etc/keentool/security/notifications.json');$q=kread($qPath);$filtered=array_filter($q,fn($mail,$key)=>!str_starts_with((string)$key,'digest-'),ARRAY_FILTER_USE_BOTH);
+            if($filtered!==$q)kwrite($qPath,$filtered);
+        }finally{kunlock($qlock);}
+    }
     if(!empty($settings['email_enabled'])&&is_file(kp('/opt/etc/keentool/mail/email.conf'))&&is_file(kp('/opt/etc/keentool/mail/emailpw.enc'))){
         $lock=klock('mail');try{$qPath=kp('/opt/etc/keentool/security/notifications.json');$q=kread($qPath);if($q){$id=array_key_first($q);$mail=$q[$id];$argv=[kp('/opt/bin/email_sender.mod'),$mail['subject'],$mail['body']];if(isset($mail['html']))$argv[]=$mail['html'];[$rc]=krun($argv,50);if($rc===0){$qlock=klock('notifications');try{$current=kread($qPath);if(($current[$id]??null)===$mail)unset($current[$id]);kwrite($qPath,$current);}finally{kunlock($qlock);}}}}finally{kunlock($lock);}
     }
@@ -457,7 +465,7 @@ function kmain($args) {
     if($mode==='event'){$category=$args[2]??'';if(!in_array($category,['wan','ping','entware','blocklist','health'],true))throw new InvalidArgumentException('Invalid event category');$at=$args[5]??null;if($at!==null&&(!kdigits($at)||(int)$at<1514764800||(int)$at>time()+60))throw new InvalidArgumentException('Invalid event timestamp');kaudit($category,substr($args[3]??'event',0,120),preg_match('/failed|error/i',$args[3]??'')?'error':'info','local','',substr($args[4]??'',0,400),$at===null?null:(int)$at);return;}
     if($mode==='settings'){
         $data=json_decode(stream_get_contents(STDIN,8192),true);if(!is_array($data))throw new InvalidArgumentException('JSON settings required');$old=kconfig();
-        foreach($data as $key=>$value){if(!array_key_exists($key,$old))throw new InvalidArgumentException('Unknown setting');if($key==='management_networks'){if(!is_array($value)||count($value)>32)throw new InvalidArgumentException('At most 32 management networks');$value=array_map(fn($net)=>knetwork($net)['text'],$value);}elseif($key==='timezone'){if(!is_string($value)||!in_array($value,timezone_identifiers_list(),true))throw new InvalidArgumentException('Valid IANA timezone required');}elseif(in_array($key,['email_enabled','immediate_alerts'],true)){if(!is_bool($value))throw new InvalidArgumentException('Boolean required');}else{if(!is_int($value))throw new InvalidArgumentException('Integer required');$range=$key==='monitor_interval'?[30,3600]:($key==='guard_seconds'?[30,300]:($key==='digest_hour'?[0,23]:(str_contains($key,'shrink')?[1,100]:[1,1000])));if($value<$range[0]||$value>$range[1])throw new InvalidArgumentException('Setting outside allowed range');}$old[$key]=$value;}
+        foreach($data as $key=>$value){if(!array_key_exists($key,$old))throw new InvalidArgumentException('Unknown setting');if($key==='management_networks'){if(!is_array($value)||count($value)>32)throw new InvalidArgumentException('At most 32 management networks');$value=array_map(fn($net)=>knetwork($net)['text'],$value);}elseif($key==='timezone'){if(!is_string($value)||!in_array($value,timezone_identifiers_list(),true))throw new InvalidArgumentException('Valid IANA timezone required');}elseif(in_array($key,['email_enabled','immediate_alerts','digest_enabled'],true)){if(!is_bool($value))throw new InvalidArgumentException('Boolean required');}else{if(!is_int($value))throw new InvalidArgumentException('Integer required');$range=$key==='monitor_interval'?[30,3600]:($key==='guard_seconds'?[30,300]:($key==='digest_hour'?[0,23]:(str_contains($key,'shrink')?[1,100]:[1,1000])));if($value<$range[0]||$value>$range[1])throw new InvalidArgumentException('Setting outside allowed range');}$old[$key]=$value;}
         kwrite(kp('/opt/etc/keentool/security/settings.json'),$old);kaudit('admin','security settings updated');echo "Settings saved\n";return;
     }
     if($mode==='clear-manual'){
