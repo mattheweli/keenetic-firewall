@@ -1,5 +1,5 @@
 <?php
-// KEENTOOL SECURITY ENGINE v1.0.4 — 2026-10-23, stable.
+// KEENTOOL SECURITY ENGINE v1.0.5 — 2026-10-29, stable.
 // Root-only local command broker, audit, guarded policy changes and monitoring.
 if (PHP_SAPI !== 'cli') { http_response_code(403); exit(1); }
 umask(0077);
@@ -442,6 +442,11 @@ function kdispatch($input) {
 }
 function kmain($args) {
     $mode=$args[1]??'status';
+    if(in_array($mode,['menu','menu-status','summary','menu-health','menu-events','menu-bypasses'],true)){
+        require_once __DIR__.'/security_menu.php';
+        if($mode==='menu-status')echo json_encode(kmdata(),JSON_INVALID_UTF8_SUBSTITUTE|JSON_THROW_ON_ERROR)."\n";
+        elseif($mode==='summary')kmsummary();elseif($mode==='menu')kmmenu();elseif($mode==='menu-health')kmhealth();elseif($mode==='menu-events')kmevents();else kmbypasses();return;
+    }
     if($mode==='path-mtime'){ $path=$args[2]??'';if($path!==kp('/opt/var/run/keentool-security-service.pid.lock'))throw new InvalidArgumentException('Unsupported metadata path');$at=@filemtime($path);if($at===false)throw new RuntimeException('Metadata unavailable');echo $at;return;}
     if($mode==='init'){
         $dir=kp('/opt/etc/keentool/security');if(!is_dir($dir))mkdir($dir,0700,true);if(!is_file($dir.'/settings.json'))kwrite($dir.'/settings.json',kconfig());
