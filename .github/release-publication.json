@@ -1,0 +1,22 @@
+{
+  "repository": "mattheweli/keenetic-firewall",
+  "release_id": 429766213,
+  "tag": "v4.0.10",
+  "target": "2ddb2ac148f1e58aa5c59e0a08d8473080919b4d",
+  "validated_run": 41177263954,
+  "pr": 14,
+  "operation_ref": "refs/heads/operations/publish-firewall-layout-20261031",
+  "merge": true,
+  "base_commit": "88f24c2bcf57c8539af2ccd8db521d8ba43a8f9a",
+  "source_tree": "78d1b17d8f97274ae26daee7264381b004970e51",
+  "assets": {
+    "keenetic-firewall-4.0.10-sources.tar.gz": {
+      "size": 183444,
+      "digest": "sha256:e6a7484f76ba1577396d1325a3d40a631381471b1aafe101f4e4fd441472ea6b"
+    },
+    "keenetic-firewall-4.0.10-sources.tar.gz.sha256": {
+      "size": 106,
+      "digest": "sha256:6e6b11590e301557341d9886cadf3ee23eb477b8a00d45c233ca4d3307173d23"
+    }
+  }
+}
