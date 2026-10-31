@@ -1,7 +1,10 @@
-# keenetic-firewall 4.0.9
+# keenetic-firewall 4.0.10
 
-Reorganize Security Monitoring into Overview, Monitoring, Notifications, Access/protection and Blocklist/logging groups. Display current service, interval, master email, immediate warning/daily summary states, summary time/timezone, management/isolation/pending state and thresholds. Immediate warning email has a W control; existing shortcuts including D remain. ON / PAUSED distinguishes enabled preferences from missing transport/master email/monitor readiness.
+- Display Top Threats & Targets in three columns at desktop viewport widths of 1,200px and above, two columns from 800px, and one column on smaller screens. Apply the same layout to all four periods and both rows of tables.
+- Give each table an equal scroll viewport, up to 600px and capped at 65% of viewport height. Keep column headings sticky while independently scrolling each table.
+- Wrap full IPv6 addresses, source/subnet details, port badges and organization names instead of forcing wide tables or truncating metadata. Keep CNT/HITS numbers intact on one line and retain Details and +N port controls.
+- Add a real Chromium layout check across eight viewport widths, two densities and four periods, including long IPv6 addresses, large counters, wrapping, internal scrolling and sticky headers.
 
-KeenTool manager 2.0.12 shows the lightweight status on its main H entry. Normal redraw reads configuration, validated PID/socket state and cached observations without kernel commands, DB/network work or backup scans. Missing/stale/future snapshots are not shown healthy. Explicit health, event and bypass actions are focused readable views; legacy status/request JSON modes stay compatible. Do not print credentials or terminal control characters.
+Package 2.0.21; Firewall component 4.0.10; Firewall dashboard 2.0.3. KeenTool manager remains 2.0.12, Main Dashboard 2.0.4, Stats 4.0.2 and hook 3.0.1. Filtering policy, databases, credentials and schedules are unchanged.
 
-Requires coordinated package 2.0.20, Security engine 1.0.5, CLI 1.0.2 and new private security_menu.php 1.0.0. Stats stays 4.0.2; installer/guardian and filtering policy are unchanged. Regression fixtures cover effective states, readiness, stale/missing/future snapshots, no expensive redraw calls, read-only events, warning toggle/redraw, main-menu fallback and credential non-disclosure.
+Install using coordinated KeenTool package 2.0.21 (manager remains 2.0.12), then reload the Firewall page.
