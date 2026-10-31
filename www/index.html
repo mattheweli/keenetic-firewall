@@ -14,7 +14,7 @@
 <!-- Changelog 2.0.1: cleaner decorative icons, consistent typography/colors and shared log terminal. -->
 <!-- Changelog 2.0.1: full-width layout, collapsible navigation and chart resize. -->
 <!-- Changelog 2.0.1: shared Keenetic-inspired navigation/theme, responsive controls and readable monitoring. -->
-<!-- Firewall Dashboard v2.0.2 | Stable release -->
+<!-- Firewall Dashboard v2.0.3 | Stable release -->
 <!-- Changelog 2.0.1: English source comments and interface messages. -->
 
 <!DOCTYPE html>
@@ -165,8 +165,32 @@
         .tables-grid { display: grid; grid-template-columns: 1fr; gap: 24px; margin-bottom: 24px; } 
         @media(min-width: 900px) { .tables-grid { grid-template-columns: 1fr 1fr; } }
         .triple-grid { display: grid; grid-template-columns: 1fr; gap: 24px; }
-        @media(min-width: 1400px) { .triple-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-        @media(min-width: 1900px) { .triple-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+        @media(min-width: 800px) { .triple-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+        @media(min-width: 1200px) { .triple-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+        /* Equal-height panels; long addresses and metadata grow rows vertically. */
+        .kt-ui .triple-grid > div { min-width: 0; display: flex; flex-direction: column; }
+        .kt-ui .triple-grid .sub-header { min-height: 3em; margin-bottom: 12px; }
+        .kt-ui .triple-grid .table-container {
+            height: min(600px, 65vh); max-height: none; overflow: auto;
+            scrollbar-gutter: stable; overscroll-behavior: contain;
+        }
+        .kt-ui .triple-grid table.kt-count-first,
+        .kt-ui .triple-grid table.kt-hits-last { min-width: 0; width: 100%; table-layout: fixed; }
+        .kt-ui .triple-grid table th,
+        .kt-ui .triple-grid table td { white-space: normal; word-break: normal; overflow-wrap: anywhere; }
+        .kt-ui .triple-grid table.kt-count-first th:first-child,
+        .kt-ui .triple-grid table.kt-count-first td:first-child,
+        .kt-ui .triple-grid table.kt-hits-last th:last-child,
+        .kt-ui .triple-grid table.kt-hits-last td:last-child {
+            width: 12ch; min-width: 0; white-space: nowrap; overflow-wrap: normal;
+            padding-left: 6px; padding-right: 6px;
+        }
+        .kt-ui .triple-grid table.kt-count-first th:nth-child(2),
+        .kt-ui .triple-grid table.kt-count-first td:nth-child(2) { min-width: 0; width: auto; }
+        .kt-ui .triple-grid table.kt-count-first th:nth-child(3),
+        .kt-ui .triple-grid table.kt-count-first td:nth-child(3) { min-width: 0; width: 30%; }
+        .kt-ui .triple-grid .meta,
+        .kt-ui .triple-grid .meta small { white-space: normal; overflow: visible; overflow-wrap: anywhere; }
         
         .sub-header { font-size: 12px; text-transform: uppercase; color: var(--primary-text); font-weight: 500; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--stroke); }
         .table-container { background: var(--background); border-radius: 8px; box-shadow: var(--box-shadow-1); border: 1px solid var(--dashboard-card-border); overflow-x: auto; -webkit-overflow-scrolling: touch; }
