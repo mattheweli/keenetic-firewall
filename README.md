@@ -2,7 +2,7 @@
 
 **Dual-stack firewall filtering, blocklist maintenance and a web dashboard for Keenetic / Entware.** Uses kernel `ipset` sets and owned iptables chains; performance depends on the router, list sizes and traffic workload.
 
-Current firewall component: **4.0.12**. Independent scripts remain Monitor **4.0.0**, Stats **4.0.2**, Manager **3.0.0** and netfilter hook **3.0.1**. The suite version is not inferred from the Monitor script.
+Current firewall component: **4.0.13**. Independent scripts remain Monitor **4.0.0**, Stats **4.0.2**, Manager **3.0.0** and netfilter hook **3.0.1**. The suite version is not inferred from the Monitor script.
 
 ![Firewall dashboard with IPv4/IPv6 lists and filtering status](https://raw.githubusercontent.com/mattheweli/KeenTool/main/docs/screenshots/firewall.png)
 
@@ -135,3 +135,5 @@ Firewall 4.0.10 / coordinated package 2.0.21 adds three equal-height desktop thr
 Firewall 4.0.11 fixes port/protocol badge overlap in the three-column port tables. Use package 2.0.22, then reload the page. Firewall dashboard advances to 2.0.4; all script versions and filtering policy remain unchanged.
 
 Firewall 4.0.12 uses left-aligned intrinsic-width CNT columns with room for grouped nine-digit totals. Use package 2.0.23, then reload the page. The Firewall page advances to 2.0.5; script versions and filtering remain unchanged.
+
+Security & Health database file sizes now use binary KiB/MiB units, with exact byte tooltips and accessible labels. Disk capacity remains decimal. Shared UI sources are included in assets/keentool-security.js and security/index.html for review; use coordinated package 2.0.24 to install them. No database rewrite is performed.
