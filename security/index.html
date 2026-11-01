@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<!-- Security & Health 1.0.3: binary database sizes with exact byte-count tooltips. -->
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Security &amp; Health</title>
+<link rel="icon" type="image/svg+xml" href="/assets/keentool.svg?v=1.0.0">
+<script src="/assets/keentool-format.js?v=1.0.0"></script>
+<link rel="stylesheet" href="/assets/keentool-ui.css?v=1.0.0">
+<script defer src="/assets/keentool-ui.js?v=1.0.1"></script>
+<script defer src="/assets/keentool-security-page.js?v=1.0.0"></script>
+<script defer src="/assets/keentool-security.js?v=1.0.3"></script>
+<style>
+/* Security page typography and layout; shared dashboard styles stay scoped. */
+.kt-ui[data-kt-page="security"] main,.kt-ui[data-kt-page="security"] #view_security{min-width:0}
+.kt-ui[data-kt-page="security"] h1{margin:0;font-size:26px;font-weight:500;line-height:1.25}
+.kt-ui[data-kt-page="security"] .section-title{margin:0;font-size:18px;font-weight:600;line-height:1.4}
+.kt-ui[data-kt-page="security"] .sub-header{margin:0 0 14px;padding:0 0 10px;font-size:16px;font-weight:600;line-height:1.4}
+.kt-ui[data-kt-page="security"] .section-header-wrapper{margin-bottom:14px;column-gap:20px;row-gap:10px}
+.kt-ui[data-kt-page="security"] #view_security section{margin-top:28px;min-width:0}
+.kt-ui[data-kt-page="security"] .security-grid{gap:24px;margin:28px 0}
+.kt-ui[data-kt-page="security"] .security-grid>section{margin-top:0!important}
+.kt-ui[data-kt-page="security"] .security-grid>div{min-width:0}
+.kt-ui[data-kt-page="security"] .grid-cards{grid-template-columns:repeat(4,minmax(0,1fr));align-items:stretch}
+.kt-ui[data-kt-page="security"] .card{display:grid;grid-template-rows:minmax(42px,auto) auto 1fr;align-content:start;padding:20px;min-width:0}
+.kt-ui[data-kt-page="security"] .card h3{margin:0;font-size:20px;font-weight:600;line-height:1.35}
+.kt-ui[data-kt-page="security"] .security-state{margin-top:8px;font-size:17px;line-height:1.45;font-weight:500;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+.kt-ui[data-kt-page="security"] .security-state{color:var(--ui-warning)}
+.kt-ui[data-kt-page="security"] .security-state[data-health="ok"]{color:#00843d;font-weight:700}
+@media(prefers-color-scheme:dark){.kt-ui[data-kt-page="security"] .security-state[data-health="ok"]{color:#5cda91}}
+.kt-ui[data-kt-page="security"] .security-state[data-health="error"]{color:var(--red)}
+.kt-ui[data-kt-page="security"] .kt-data-state[data-state="error"]{color:var(--red)}
+.kt-ui[data-kt-page="security"] .kt-data-state[data-state="error"] .kt-state-dot{background:var(--red)}
+.kt-ui[data-kt-page="security"] .card .kt-list-note{margin:8px 0 0}
+.kt-ui[data-kt-page="security"] .kt-list-note{font-size:13px;line-height:1.6;max-width:110ch}
+.kt-ui[data-kt-page="security"] table{font-size:14px;line-height:1.5}
+.kt-ui[data-kt-page="security"] table thead th{font-size:13px;font-weight:600;line-height:1.4;vertical-align:middle;white-space:nowrap}
+.kt-ui[data-kt-page="security"] table td{vertical-align:top;font-variant-numeric:tabular-nums}
+.kt-ui[data-kt-page="security"] .security-numbers td:nth-child(2),.kt-ui[data-kt-page="security"] .security-numbers th:nth-child(2),.kt-ui[data-kt-page="security"] .security-lists td:nth-child(3),.kt-ui[data-kt-page="security"] .security-lists th:nth-child(3){text-align:right;white-space:nowrap}
+.kt-ui[data-kt-page="security"] .security-lists{min-width:860px}
+.kt-ui[data-kt-page="security"] .security-timeline{min-width:900px}
+.kt-ui[data-kt-page="security"] .security-compare{min-width:440px}
+#security_lists td:nth-child(5),#security_events td:last-child{min-width:260px;max-width:620px;white-space:normal;overflow-wrap:anywhere}
+#security_lists td:first-child,#security_lists td:last-child{white-space:nowrap}
+.kt-ui[data-kt-page="security"] .security-policy summary{font-size:15px;font-weight:500;line-height:1.5;cursor:pointer}
+@media(max-width:1200px){.kt-ui[data-kt-page="security"] .grid-cards{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:800px){.kt-ui[data-kt-page="security"] .security-grid{grid-template-columns:minmax(0,1fr)}}
+@media(max-width:480px){.kt-ui[data-kt-page="security"] .grid-cards{grid-template-columns:minmax(0,1fr)}.kt-ui[data-kt-page="security"] .card{grid-template-rows:auto auto 1fr}.kt-ui[data-kt-page="security"] .section-title{font-size:17px}}
+</style>
+</head><body class="kt-ui" data-kt-page="security">
+
+    <dialog id="admin_dialog" style="border:1px solid #ddd;border-radius:10px;max-width:360px">
+      <form id="admin_login_form">
+        <h3>Administrator access</h3>
+        <p><label>Password <input id="admin_password" type="password" required autocomplete="current-password" maxlength="72"></label></p>
+        <p id="admin_login_error" role="alert" style="color:#b42318"></p>
+        <button type="submit" class="btn-action">Log in</button>
+        <button type="button" class="btn-action" onclick="document.getElementById('admin_dialog').close()">Cancel</button>
+      </form>
+    </dialog>
+<header class="header"><h1>Security &amp; Health</h1><div class="header-controls"><span id="admin_state">Read-only</span><button type="button" class="btn-action" id="admin_login_button" onclick="openAdminLogin()">Admin login</button><button type="button" class="btn-action" id="admin_logout_button" onclick="adminLogout()" hidden>Log out</button></div></header>
+<main>    <div id="view_security" class="view-section active">
+        <div class="section-header-wrapper"><h2 class="section-title">System Health &amp; Security</h2></div>
+        <p class="kt-list-note" id="security_updated">Waiting for security monitor</p>
+        <div class="grid-cards">
+            <div class="card"><h3>Firewall</h3><div class="security-state" id="security_fw">Unavailable</div></div>
+            <div class="card"><h3>Entware storage</h3><div class="security-state" id="security_disk">Unavailable</div></div>
+            <div class="card"><h3>Web privileges</h3><div class="security-state" id="security_web">Not verified</div><p class="kt-list-note" id="security_web_note"></p></div>
+            <div class="card"><h3 id="security_backup_title">Latest verified backup</h3><div class="security-state" id="security_backup">Unavailable</div><p class="kt-list-note" id="security_backup_note"></p></div>
+        </div>
+        <div class="security-grid">
+            <section><h2 class="sub-header">Database sizes</h2><div class="table-container"><table class="security-numbers"><thead><tr><th>Database</th><th>Size</th></tr></thead><tbody id="security_databases"></tbody></table></div></section>
+            <section><h2 class="sub-header">Services</h2><div class="table-container"><table><thead><tr><th>Service</th><th>State</th></tr></thead><tbody id="security_services"></tbody></table></div></section>
+        </div>
+        <section><h2 class="sub-header">Blocklist updates</h2><p class="kt-list-note">GeoIP variations use dedicated warning thresholds. A valid GeoIP update is not rejected by size alone. Counts refer to prefixes, not address coverage. Details describe the latest attempt; a cached-source warning means the source data may be older.</p><div class="table-container"><table class="security-numbers security-lists"><thead><tr><th>List</th><th>Prefixes</th><th>Change</th><th>Result</th><th>Details</th><th>Last attempt</th></tr></thead><tbody id="security_lists"></tbody></table></div></section>
+        <section><h2 class="sub-header">Managed manual bans</h2><div class="table-container"><table><thead><tr><th>IP / subnet</th><th>Expires</th><th>Created</th><th>Actions</th></tr></thead><tbody id="security_manual"></tbody></table></div><p class="kt-list-note">Bans created with the new security tools. Legacy manual lists remain available in IP diagnostics. Expiry is shown from the snapshot; kernel timeout is authoritative.</p></section>
+        <details class="security-policy"><summary>Policy bypass and management protection review</summary><pre id="security_policy"></pre><p class="kt-list-note">Configure additional protected management CIDRs with KeenTool → H. Default hook exceptions remain unchanged. Logging defaults to 2 packets/second with burst 10 per NFLOG rule; kernel drop counters remain complete. Captured flow and port details are sampled.</p></details>
+        <section><div class="section-header-wrapper"><h2 class="section-title">Period comparison</h2><select class="refresh-select" id="security_compare_range" aria-label="Comparison period"><option value="day">Last 24h vs previous 24h</option><option value="week">Last 7 days vs previous 7 days</option></select></div><p class="kt-list-note" id="security_comparison_note"></p><p class="kt-list-note" id="security_comparison_periods"></p>
+            <div class="security-grid"><div><h3 class="sub-header">Source IP countries</h3><div class="table-container"><table class="security-compare"><thead><tr><th>Country</th><th id="security_country_current_heading">Last 24h</th><th id="security_country_previous_heading">Preceding 24h</th><th>Change</th></tr></thead><tbody id="security_country_compare"></tbody></table></div></div>
+            <div><h3 class="sub-header">Latest target-port attribution</h3><div class="table-container"><table class="security-compare"><thead><tr><th>Port</th><th id="security_port_current_heading">Last 24h</th><th id="security_port_previous_heading">Preceding 24h</th><th>Change</th></tr></thead><tbody id="security_port_compare"></tbody></table></div></div></div>
+            <p class="kt-list-note">Country metadata is current, including for historical periods. Port comparisons attribute each IP's recorded hits to its latest target-port metadata; these are not per-port packet totals. Incomplete historical coverage can affect comparisons.</p>
+        </section>
+        <section><div class="section-header-wrapper"><h2 class="section-title">Event timeline</h2><select class="refresh-select" id="security_category" aria-label="Event category"><option value="all">All events</option><option value="wan">WAN / PPP</option><option value="ping">Ping</option><option value="firewall">Firewall</option><option value="blocklist">Blocklists</option><option value="entware">Entware</option><option value="health">Health</option><option value="backup">Backups</option><option value="admin">Admin activity</option></select></div>
+            <div class="table-container"><table class="security-timeline"><thead><tr><th>Time</th><th>Category</th><th>Event</th><th>Target</th><th>Outcome</th><th>Details</th></tr></thead><tbody id="security_events"></tbody></table></div><p class="kt-list-note">Latest 200 events since this security service was installed. Public timeline omits client addresses and private admin notes.</p>
+        </section>
+        <section data-admin-only hidden><div class="section-header-wrapper"><h2 class="section-title">Administrative audit</h2><button class="btn-action" type="button" onclick="loadSecurityAudit()">Load private audit</button></div><div class="table-container"><table class="security-timeline"><thead><tr><th>Time</th><th>Event</th><th>Actor</th><th>Target</th><th>Outcome</th><th>Details</th><th>Note</th></tr></thead><tbody id="security_audit"></tbody></table></div></section>
+    </div>
+
+</main>    <div id="ipModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 class="modal-title" id="modalTitle">Attackers on Port </h3>
+                <span class="close" onclick="closeModal()">&times;</span>
+            </div>
+            <div class="ip-list-container" id="modalBody"></div>
+            <div class="modal-actions">
+                <button class="btn-action" onclick="copyIPList()">Copy to Clipboard</button>
+                <button class="btn-action" onclick="downloadIPList()">Download List</button>
+            </div>
+        </div>
+    </div>
+
+<footer class="kt-page-footer">&copy; <span data-kt-year>2026</span> mattheweli<span class="kt-footer-meta">Security &amp; Health 1.0.2</span></footer></body></html>
