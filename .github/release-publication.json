@@ -1,0 +1,22 @@
+{
+  "repository": "mattheweli/keenetic-firewall",
+  "release_id": 435448426,
+  "tag": "v4.0.14",
+  "target": "a663434afc92a823e818adc9ede593ab6aeb073a",
+  "validated_run": 42065432193,
+  "pr": 18,
+  "operation_ref": "refs/heads/operations/publish-public-ip-check-20261105",
+  "merge": true,
+  "base_commit": "2e5d4b3545164b574b1a1c4e03dbe4e5fc04846d",
+  "source_tree": "046be2b272e455026f8c3e317c167205c84296c4",
+  "assets": {
+    "keenetic-firewall-4.0.14-sources.tar.gz": {
+      "size": 193852,
+      "digest": "sha256:938f9690d15c34542930e9fefdd6d29cf39b1c515c39e16ddebd116ce6da59a6"
+    },
+    "keenetic-firewall-4.0.14-sources.tar.gz.sha256": {
+      "size": 106,
+      "digest": "sha256:9e63bd11a568af3a389eb8ee40219fb6370633292e83340cf5c33e8cf2d90d31"
+    }
+  }
+}
