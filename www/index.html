@@ -14,7 +14,7 @@
 <!-- Changelog 2.0.1: cleaner decorative icons, consistent typography/colors and shared log terminal. -->
 <!-- Changelog 2.0.1: full-width layout, collapsible navigation and chart resize. -->
 <!-- Changelog 2.0.1: shared Keenetic-inspired navigation/theme, responsive controls and readable monitoring. -->
-<!-- Firewall Dashboard v2.0.6 | Stable release -->
+<!-- Firewall Dashboard v2.0.7 | Stable release -->
 <!-- Changelog 2.0.1: English source comments and interface messages. -->
 
 <!DOCTYPE html>
@@ -390,15 +390,15 @@
             <div class="clock-badge">Updated: <span id="last_update_header">-</span></div>
         </div>
     </div>
-	<div class="card" id="ip_control_panel" data-admin-only hidden style="margin-bottom: 24px; flex-direction: row; flex-wrap: wrap; justify-content: space-between; align-items: center; min-height: auto; padding: 12px 24px;">
-        <div class="section-title" style="margin-bottom: 0;">Quick IP Control</div>
+	<div class="card" id="ip_control_panel" style="margin-bottom: 24px; flex-direction: row; flex-wrap: wrap; justify-content: space-between; align-items: center; min-height: auto; padding: 12px 24px;">
+        <div class="section-title" style="margin-bottom: 0;">IP / subnet check</div>
         <div style="display: flex; gap: 10px; flex-wrap: wrap; flex: 1; max-width: 600px; margin-left: 20px;">
-            <input type="text" id="ip_input" placeholder="IPv4 / IPv6 address or CIDR" style="padding: 8px; border-radius: 4px; border: 1px solid var(--stroke); flex: 1; min-width: 150px; background: var(--background); color: var(--primary-text);">
-            <select class="refresh-select" id="manual_duration" aria-label="Ban duration"><option value="900">15 minutes</option><option value="3600" selected>1 hour</option><option value="86400">24 hours</option><option value="0">Permanent</option></select>
-            <input id="manual_note" maxlength="200" aria-label="Private ban note" placeholder="Optional private note">
-            <button class="btn-action" onclick="lookupIP()">Explain</button>
-            <button class="btn-action" style="color: var(--red); border-color: var(--red);" data-admin-write disabled onclick="banIP()">Ban</button>
-            <button class="btn-action" style="color: var(--green); border-color: var(--green);" data-admin-write disabled onclick="unbanIP(document.getElementById('ip_input').value)">Unban</button>
+            <input type="text" id="ip_input" aria-label="IPv4 / IPv6 address or subnet" autocomplete="off" spellcheck="false" placeholder="IPv4 / IPv6 address or CIDR" style="padding: 8px; border-radius: 4px; border: 1px solid var(--stroke); flex: 1; min-width: 150px; background: var(--background); color: var(--primary-text);">
+            <select class="refresh-select" id="manual_duration" data-admin-only hidden data-admin-write disabled aria-label="Ban duration"><option value="900">15 minutes</option><option value="3600" selected>1 hour</option><option value="86400">24 hours</option><option value="0">Permanent</option></select>
+            <input id="manual_note" data-admin-only hidden data-admin-write disabled maxlength="200" aria-label="Private ban note" placeholder="Optional private note">
+            <button type="button" id="ip_check_button" class="btn-action" onclick="lookupIP()">Check</button>
+            <button class="btn-action" style="color: var(--red); border-color: var(--red);" data-admin-only hidden data-admin-write disabled onclick="banIP()">Ban</button>
+            <button class="btn-action" style="color: var(--green); border-color: var(--green);" data-admin-only hidden data-admin-write disabled onclick="unbanIP(document.getElementById('ip_input').value)">Unban</button>
         </div>
         <div id="ip_status_result" style="width: 100%; margin-top: 10px; font-size: 13px; font-weight: bold;"></div>
     </div>
@@ -1075,9 +1075,15 @@
 		
 		// --- FIREWALL API FUNCTIONS ---
         async function lookupIP() {
-            const ip=document.getElementById('ip_input').value.trim();
-            if(ip && window.explainIP) return window.explainIP(ip);
+            const input=document.getElementById('ip_input'),result=document.getElementById('ip_status_result');
+            const ip=input.value.trim();
+            if(!ip) { result.textContent='Enter an IPv4 / IPv6 address or subnet.';input.focus();return; }
+            result.textContent='';
+            if(window.explainIP) return window.explainIP(ip);
         }
+        document.getElementById('ip_input').addEventListener('keydown',event=>{
+            if(event.key==='Enter') { event.preventDefault();lookupIP(); }
+        });
 
         let adminCsrf = '', adminAuthenticated = false;
         function syncQuickUnban() {
@@ -1106,7 +1112,7 @@
             document.querySelectorAll('[data-admin-write]').forEach(el => el.disabled = !active);
             document.querySelectorAll('[data-admin-only]').forEach(el => el.hidden = !active);
             if(!active && document.getElementById('security_audit'))document.getElementById('security_audit').textContent='';
-            if(!active) { document.getElementById('ip_input').value=''; document.getElementById('ip_status_result').textContent=''; }
+            if(!active) document.getElementById('manual_note').value='';
         }
         async function authRequest(action, payload) {
             const options = {credentials:'same-origin',cache:'no-store',headers:{}};
@@ -1181,9 +1187,9 @@
         async function unbanIP(ip) {
             try {
             if (!ip) return;
-            if(confirm(`Are you sure you want to UNBLOCK and remove ${ip}?`)) {
+            if(confirm(`Remove manual/dynamic ban entries for ${ip}? This does not add it to the whitelist.`)) {
                 const result=await checkedAction(`firewall_api.php?action=unban&ip=${encodeURIComponent(ip)}`);
-                alert(result.remaining && result.remaining.length ? `Removed manual/dynamic ban; still listed in: ${result.remaining.join(', ')}` : `IP ${ip} successfully unblocked.`);
+                alert(`Manual/dynamic ban entries removed for ${ip}. No whitelist entry was added.` + (result.remaining && result.remaining.length ? ` Remaining list memberships: ${result.remaining.join(', ')}` : ''));
                 // If it was called from the quick search, clear it
                 if(document.getElementById('ip_input').value === ip) {
                     document.getElementById('ip_status_result').innerHTML = "";

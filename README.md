@@ -2,7 +2,7 @@
 
 **Dual-stack firewall filtering, blocklist maintenance and a web dashboard for Keenetic / Entware.** Uses kernel `ipset` sets and owned iptables chains; performance depends on the router, list sizes and traffic workload.
 
-Current firewall component: **4.0.13**. Independent scripts remain Monitor **4.0.0**, Stats **4.0.2**, Manager **3.0.0** and netfilter hook **3.0.1**. The suite version is not inferred from the Monitor script.
+Current firewall component: **4.0.14**. Independent scripts remain Monitor **4.0.0**, Stats **4.0.2**, Manager **3.0.0** and netfilter hook **3.0.1**. The suite version is not inferred from the Monitor script.
 
 ![Firewall dashboard with IPv4/IPv6 lists and filtering status](https://raw.githubusercontent.com/mattheweli/KeenTool/main/docs/screenshots/firewall.png)
 
@@ -14,6 +14,10 @@ Current firewall component: **4.0.13**. Independent scripts remain Monitor **4.0
 - Read-only IP/subnet diagnostics: set membership, rule references, historical counters, metadata and bypass context.
 - Port expansion, country ranking/map, period comparisons and readable NFLOG/ulogd-derived records.
 - Shared HTTPS administrator authentication, CSRF checks and optional web privilege separation through the root command broker.
+
+## Public IP checks and Unban
+
+Use the IP / subnet check field without administrator login. Ban and Unban remain administrator-only. Unban removes manual/dynamic entries; it does not whitelist an address. Static and GeoIP memberships may still block it, and future detection may ban it again. Use Check to inspect remaining memberships.
 
 ## How filtering and statistics differ
 
@@ -98,13 +102,9 @@ Screenshots are generated from the current application templates with **syntheti
 
 Created and maintained by **mattheweli**. The repository's existing LICENSE applies.
 
-## Guarded upgrade from Legacy
+The coordinated 2.0.14 installer supports guarded hook migration with explicit application consent, a fresh SSH challenge and independent timeout/source/rule rollback. Apply through KeenTool u or the new updater with `--update --reinstall --apply-firewall`; deferral preserves the old hook. Shared transaction support ships with the coordinated suite.
 
-Update through KeenTool coordinated package 2.0.14. Enabled-firewall migrations require application consent and a fresh SSH confirmation challenge, with independent timeout recovery of previous owned rules and source. Deferral preserves the previous boot hook; disabled firewalls stay disabled. The new hook and private guardian depend on the coordinated installer/runtime. See [FIREWALL_UPGRADE.md](docs/FIREWALL_UPGRADE.md).
-
-## Interrupted 2.0.14 upgrade fix
-
-Use coordinated package 2.0.15 for integer-only BusyBox guardian waits and corrected rollback service handling. If an earlier attempt failed, inspect the retained transaction and use the checksum-verified recovery asset from that release before retrying. Existing source/credentials/data/lists are preserved; an untouched running vnStat is not stopped. Hook and other script versions remain unchanged.
+Firewall 4.0.4 uses guardian 1.0.1 with integer-only sleep support. Coordinated package 2.0.15 also corrects rollback service handling and publishes an interrupted-upgrade recovery asset. Hook stays 3.0.1; manager/statistics/monitor versions are unchanged.
 
 ## Support the project
 
@@ -118,22 +118,20 @@ Cryptocurrency donations (copy the address):
 - **Ethereum (ETH):** `0x8487b6205fd76d7516f07b1117a66966dcf2f0e4`
 - **Bitcoin (BTC):** `bc1qvp5dnsnw60e963dfcgk3jfsfrwys86ufccygsw`
 
-## Compact history storage
+Firewall 4.0.5 / Stats 4.0.2 adds opt-in compact IP storage and a balanced 2/7/365-day policy through coordinated package 2.0.16. See [database maintenance](https://github.com/mattheweli/KeenTool/blob/main/suite/docs/DATABASE_STORAGE.md) for backups, precision and downgrade requirements. Existing databases/settings are preserved until maintenance is explicitly requested.
 
-Firewall 4.0.5 / Stats 4.0.2 adds optional compact IP identifiers and a balanced 2/7/365-day profile. Installation preserves existing databases/settings. Review [DATABASE_STORAGE.md](docs/DATABASE_STORAGE.md) before running explicit maintenance. Shared helpers require coordinated KeenTool package 2.0.16; do not install isolated scripts.
+Firewall 4.0.6 / coordinated package 2.0.17 guarantees a fresh backup for every explicit balanced-profile invocation, including already compact databases. Stats stays 4.0.2.
 
-Firewall 4.0.6 / package 2.0.17 adds a fresh verified backup for every explicit balanced-profile invocation, including already compact databases. Stats remains 4.0.2.
+Firewall 4.0.7 / package 2.0.18 exposes confirmed Balanced optimization in KeenTool → Firewall Suite → History aggregation settings (option 6) → Apply Balanced profile now (option 2). Fresh installations request Balanced/compact storage automatically at first due statistics maintenance. Upgrades preserve saved settings.
 
-Firewall 4.0.7 / package 2.0.18 adds KeenTool Firewall → 6 → 2 for confirmed Balanced optimization. Fresh installations default to Balanced/compact storage at first due maintenance; existing upgrade settings are preserved. See docs/DATABASE_STORAGE.md.
+Firewall 4.0.8 / package 2.0.19 adds an independent Daily summary email switch and automatic verified updates for recognized healthy adopted hooks. The general update approval remains; first legacy/custom migration keeps SSH confirmation. See the coordinated email and upgrade guides.
 
-Firewall 4.0.8 / package 2.0.19 adds a separate Daily summary email switch and automatic verified updates for healthy recognized adopted hooks, retaining first legacy/custom migration review and independent rollback. See the email/upgrade guides.
+Firewall 4.0.9 / package 2.0.20 supplies the grouped Security Monitoring CLI with visible warning/digest states, lightweight service/snapshot status and focused health/events/bypass views. Manager advances to 2.0.12 for the main H status entry; Stats stays 4.0.2.
 
-Firewall 4.0.9 / package 2.0.20 adds a grouped Security Monitoring CLI with visible effective warning/digest states, service/snapshot readiness and readable focused views. KeenTool manager 2.0.12 shows the compact H summary; Stats remains 4.0.2.
+Firewall 4.0.10 / package 2.0.21 uses three equal-height threat tables per row on desktop (1,200px and above), two on tablets and one on phones. Long source and metadata values wrap; each table scrolls independently with sticky headers. Filtering and history storage are unchanged.
 
-Firewall 4.0.10 / coordinated package 2.0.21 adds three equal-height desktop threat tables, responsive wrapping, independent vertical scrolling and sticky headers. Firewall dashboard advances to 2.0.3; manager, Stats, hook and filtering policy remain unchanged.
+Firewall 4.0.11 fixes overlap between full port/protocol badges and attacker addresses. The dedicated port column now fits the actual exported badges while keeping the three-column desktop layout. Update using package 2.0.22 and reload the page.
 
-Firewall 4.0.11 fixes port/protocol badge overlap in the three-column port tables. Use package 2.0.22, then reload the page. Firewall dashboard advances to 2.0.4; all script versions and filtering policy remain unchanged.
+Firewall 4.0.12 aligns CNT to the left and uses only the width needed by the displayed counters, including values through 999.999.999. Use coordinated package 2.0.23 and reload the page.
 
-Firewall 4.0.12 uses left-aligned intrinsic-width CNT columns with room for grouped nine-digit totals. Use package 2.0.23, then reload the page. The Firewall page advances to 2.0.5; script versions and filtering remain unchanged.
-
-Security & Health database file sizes now use binary KiB/MiB units, with exact byte tooltips and accessible labels. Disk capacity remains decimal. Shared UI sources are included in assets/keentool-security.js and security/index.html for review; use coordinated package 2.0.24 to install them. No database rewrite is performed.
+Security & Health database file sizes use binary units (KiB/MiB) and show exact bytes in size-cell tooltips. Disk capacity keeps decimal units. Use coordinated package 2.0.25; no database rewrite is performed.
